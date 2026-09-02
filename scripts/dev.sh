@@ -204,7 +204,12 @@ cmd_status() {
 # What an agent greps after a restart to decide whether the change loaded.
 cmd_errors() {
   [[ -f "$LOG" ]] || { echo "no log yet"; return; }
-  grep -nE 'Error|error while running|failed|cannot' "$LOG" | tail -20 || echo "no errors"
+  # "Got EOF on stdin" is expected: the server is started with stdin closed, so
+  # it drops its console reader. Filtering it keeps this check a real signal.
+  grep -nE 'Error|error while running|failed|cannot' "$LOG" \
+    | grep -v 'InterruptibleStdioStream' \
+    | tail -20 \
+    || echo "no errors"
 }
 
 case "${1:-status}" in
