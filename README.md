@@ -94,6 +94,23 @@ A tick is 16.67 ms at 60 UPS and sampling runs once per *second*, so all of it
 together costs well under 1% of a second. Payload, not CPU, is the limit: a
 snapshot with four windows plus a history burst is ~19 KB across ~16 datagrams.
 
+The **all-time column** of the production screen costs nothing extra: it is the
+*values* in `input_counts` / `output_counts`, the dictionaries already iterated
+for their keys. Those are exact counts rather than rates, so they are sent
+unscaled and the page formats and labels them differently — there is no graph
+for them, because the game only keeps samples per window.
+
+**Science** is reported as two numbers, because it is not one:
+
+| Tile | Meaning |
+|---|---|
+| SPM | research units per minute — what "1k SPM" means. A unit needs the whole ingredient list, so the rate is the scarcest pack: `min(consumed / amount)` over `research_unit_ingredients`, which the mod sends so the consumer never has to guess which packs count. |
+| Science packs/min | every science pack consumed, added up. Always larger. |
+
+Both sum across surfaces first, since labs can sit on any planet. On the dev save
+this immediately showed utility science at 8/min throttling research while every
+other pack ran at 22–26.
+
 **UPS is measured in the sidecar**, not the mod. Factorio exposes no UPS to Lua —
 `LuaProfiler` measures real time but can only be written to the log, never read
 back — so the sidecar derives it from how far the tick advances per second of

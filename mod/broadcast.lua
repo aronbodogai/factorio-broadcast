@@ -110,29 +110,45 @@ local function q(x)
   return math.floor(x * 100 + 0.5)
 end
 
---- Windowed input/output rates for every prototype with a non-zero total.
---- Iterating input_counts keeps this O(items this force has ever made) rather
---- than O(every prototype in the game).
-local function read_flow(stats, window)
-  local precision = WINDOWS[window]
-  local out = { input = {}, output = {} }
-  for name in pairs(stats.input_counts) do
-    local rate = stats.get_flow_count({ name = name, category = "input", precision_index = precision })
-    if rate and rate > 0 then out.input[name] = q(rate) end
-  end
-  for name in pairs(stats.output_counts) do
-    local rate = stats.get_flow_count({ name = name, category = "output", precision_index = precision })
-    if rate and rate > 0 then out.output[name] = q(rate) end
-  end
-  return out
-end
-
+--- Windowed rates for every prototype with a non-zero total, plus the all-time
+--- totals - the "all" column of the in-game production screen.
+---
+--- input_counts and output_counts are fetched once and reused across every
+--- window: they are the set of prototypes this force has ever touched, so this
+--- stays O(items produced) rather than O(every prototype in the game), and the
+--- dictionaries are not rebuilt per window.
+---
+--- The all-time totals cost nothing extra - they are the *values* in those same
+--- dictionaries, which the per-window loops only use for their keys. They are
+--- sent unscaled, being exact counts rather than rates.
 local function read_flow_windows(stats, windows)
+  local inputs = stats.input_counts
+  local outputs = stats.output_counts
+
   local out = {}
   for _, window in pairs(windows) do
-    out[window] = read_flow(stats, window)
+    local precision = WINDOWS[window]
+    local flow = { input = {}, output = {} }
+    for name in pairs(inputs) do
+      local rate = stats.get_flow_count({ name = name, category = "input", precision_index = precision })
+      if rate and rate > 0 then flow.input[name] = q(rate) end
+    end
+    for name in pairs(outputs) do
+      local rate = stats.get_flow_count({ name = name, category = "output", precision_index = precision })
+      if rate and rate > 0 then flow.output[name] = q(rate) end
+    end
+    out[window] = flow
   end
-  return out
+
+  local totals = { input = {}, output = {} }
+  for name, count in pairs(inputs) do
+    if count > 0 then totals.input[name] = count end
+  end
+  for name, count in pairs(outputs) do
+    if count > 0 then totals.output[name] = count end
+  end
+
+  return out, totals
 end
 
 --- The 300 samples behind one line of an in-game statistics graph.
@@ -294,7 +310,8 @@ local function snapshot()
 
   for _, surface in pairs(game.surfaces) do
     local item_stats = force.get_item_production_statistics(surface)
-    local items = read_flow_windows(item_stats, windows_now)
+    local items, item_totals = read_flow_windows(item_stats, windows_now)
+    local fluids, fluid_totals = read_flow_windows(force.get_fluid_production_statistics(surface), windows_now)
 
     surface_names[#surface_names + 1] = surface.name
     surfaces[surface.name] = {
@@ -302,7 +319,9 @@ local function snapshot()
       platform = surface.platform ~= nil,
       pollution = q(surface.get_total_pollution()),
       items = items,
-      fluids = read_flow_windows(force.get_fluid_production_statistics(surface), windows_now),
+      item_totals = item_totals,
+      fluid_totals = fluid_totals,
+      fluids = fluids,
       power = read_power(surface.name),
       logistics = read_logistics(force, surface.name),
     }
@@ -322,11 +341,21 @@ local function snapshot()
 
   local research = nil
   if force.current_research then
+    -- The pack recipe for one research unit, so the consumer can turn science
+    -- pack consumption into research units per minute rather than guessing
+    -- which packs count and how many of each a unit needs.
+    local ingredients = {}
+    for _, ingredient in pairs(force.current_research.research_unit_ingredients) do
+      ingredients[#ingredients + 1] = { name = ingredient.name, amount = ingredient.amount }
+    end
+
     research = {
       name = force.current_research.name,
       level = force.current_research.level,
       progress = q(force.research_progress * 100),
       queue = #force.research_queue,
+      ingredients = ingredients,
+      unit_count = force.current_research.research_unit_count,
     }
   end
 

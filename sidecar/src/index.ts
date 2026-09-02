@@ -93,13 +93,27 @@ function normaliseFlowWindows(value: unknown) {
   return out;
 }
 
+/** All-time totals are exact counts, not rates, so they are not scaled by 100. */
+function totalsAsWindow(value: any) {
+  return {
+    produced: { ...(value?.input ?? {}) } as Record<string, number>,
+    consumed: { ...(value?.output ?? {}) } as Record<string, number>,
+  };
+}
+
 function normaliseSurface(d: any) {
+  const items = normaliseFlowWindows(d.items);
+  const fluids = normaliseFlowWindows(d.fluids);
+  // The "all" column of the in-game production screen.
+  if (d.item_totals) items.all = totalsAsWindow(d.item_totals);
+  if (d.fluid_totals) fluids.all = totalsAsWindow(d.fluid_totals);
+
   return {
     name: d.name,
     platform: d.platform,
     pollution: un(d.pollution),
-    items: normaliseFlowWindows(d.items),
-    fluids: normaliseFlowWindows(d.fluids),
+    items,
+    fluids,
     power: asArray<any>(d.power).map((n) => ({
       id: n.id,
       producedW: watts(n.produced_j),
@@ -151,7 +165,9 @@ function applySnapshot(raw: any) {
       playersOnline: raw.players_online,
       players: asArray(raw.players),
       surfaceNames: asArray<string>(raw.surface_names),
-      windows: asArray<string>(raw.windows),
+      // "all" is not a statistics window the game samples; it is the cumulative
+      // total, which the mod sends alongside them.
+      windows: [...asArray<string>(raw.windows), 'all'],
       baseWindow: raw.base_window ?? '1m',
     },
     surfaces,
