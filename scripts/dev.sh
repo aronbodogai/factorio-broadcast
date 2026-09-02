@@ -33,6 +33,15 @@ RCON_PASSWORD="${FB_RCON_PASSWORD:-devpass}"
 WIN_SAVES="/mnt/c/Users/ideku/AppData/Roaming/Factorio/saves"
 NODE="${FB_NODE:-$HOME/fb/node/bin/node}"
 
+# Two ways to ship the same logic. In "mod" mode the server runs the mod, and a
+# joining client is prompted to sync it. In "softmod" mode the logic lives in
+# the save's scenario script and the client is asked for nothing.
+MODE_FILE="$INSTANCE/mode"
+SOFTMOD_SAVE="$INSTANCE/softmod.zip"
+VANILLA_MODS="$INSTANCE/mods-vanilla"
+
+current_mode() { cat "$MODE_FILE" 2>/dev/null || echo mod; }
+
 server_pid() {
   [[ -f "$PIDFILE" ]] || return 1
   local p
@@ -115,7 +124,14 @@ cmd_reset_save() {
 
 cmd_start() {
   if server_pid >/dev/null; then echo "already running (pid $(server_pid))"; return; fi
-  [[ -f "$SAVE" ]] || { echo "no save; run: $0 setup" >&2; exit 1; }
+
+  local save="$SAVE" mods="$MODS"
+  if [[ "$(current_mode)" == softmod ]]; then
+    save="$SOFTMOD_SAVE"
+    mods="$VANILLA_MODS"
+    [[ -f "$save" ]] || { echo "no softmod save; run: $0 softmod" >&2; exit 1; }
+  fi
+  [[ -f "$save" ]] || { echo "no save; run: $0 setup" >&2; exit 1; }
 
   # setsid, not just nohup: WSL kills the whole process group when the wsl.exe
   # session that started it exits, so the server must leave that session.
@@ -129,11 +145,11 @@ cmd_start() {
       --rcon-password "$7" \
       --enable-lua-udp "$8" \
       --port "$9"' _ \
-    "$PIDFILE" "$FACTORIO" "$SAVE" "$SETTINGS" "$MODS" "$RCON_PORT" "$RCON_PASSWORD" "$LUA_UDP_PORT" "$GAME_PORT" \
+    "$PIDFILE" "$FACTORIO" "$save" "$SETTINGS" "$mods" "$RCON_PORT" "$RCON_PASSWORD" "$LUA_UDP_PORT" "$GAME_PORT" \
     </dev/null >"$LOG" 2>&1 &
 
   for _ in $(seq 1 20); do [[ -s "$PIDFILE" ]] && break; sleep 0.2; done
-  echo "started pid=$(cat "$PIDFILE") rcon=127.0.0.1:$RCON_PORT lua-udp=$LUA_UDP_PORT"
+  echo "started pid=$(cat "$PIDFILE") mode=$(current_mode) rcon=127.0.0.1:$RCON_PORT lua-udp=$LUA_UDP_PORT"
 }
 
 cmd_wait_ready() {
@@ -170,6 +186,30 @@ cmd_rcon_lua() {
   local file="${1:-}"
   [[ -f "$file" ]] || { echo "usage: $0 rcon-lua <file.lua>" >&2; exit 64; }
   cmd_rcon "/silent-command $(tr '\n' ' ' < "$file")"
+}
+
+# Rebuild the softmod save from the current mod/broadcast.lua and switch to it.
+cmd_softmod() {
+  mkdir -p "$VANILLA_MODS"
+  # Deliberately without factorio-broadcast: that is the whole point.
+  cat > "$VANILLA_MODS/mod-list.json" <<'JSON'
+{
+  "mods": [
+    { "name": "base", "enabled": true },
+    { "name": "elevated-rails", "enabled": true },
+    { "name": "quality", "enabled": true },
+    { "name": "space-age", "enabled": true }
+  ]
+}
+JSON
+  python3 "$REPO/scripts/make-scenario.py" "$SAVE" "$SOFTMOD_SAVE"
+  echo softmod > "$MODE_FILE"
+  echo "mode: softmod (clients need no download)"
+}
+
+cmd_mod_mode() {
+  echo mod > "$MODE_FILE"
+  echo "mode: mod (clients are prompted to sync factorio-broadcast)"
 }
 
 cmd_sidecar_start() {
@@ -214,6 +254,9 @@ cmd_errors() {
 
 case "${1:-status}" in
   setup)          cmd_setup ;;
+  softmod)        cmd_softmod ;;
+  mod)            cmd_mod_mode ;;
+  mode)           current_mode ;;
   start)          cmd_start ;;
   stop)           cmd_stop ;;
   restart)        cmd_stop; cmd_start; cmd_wait_ready ;;
@@ -226,5 +269,5 @@ case "${1:-status}" in
   sidecar-stop)   cmd_sidecar_stop ;;
   rcon)           shift; cmd_rcon "$@" ;;
   rcon-lua)       shift; cmd_rcon_lua "$@" ;;
-  *)              echo "usage: $0 {setup|start|stop|restart|wait|status|errors|logs|reset-save|sidecar|sidecar-stop|rcon}" >&2; exit 64 ;;
+  *)              echo "usage: $0 {setup|softmod|mod|mode|start|stop|restart|wait|status|errors|logs|reset-save|sidecar|sidecar-stop|rcon}" >&2; exit 64 ;;
 esac

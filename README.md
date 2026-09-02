@@ -91,9 +91,23 @@ So `helpers.send_udp` works from a scenario script with no mod present. A save's
 scenario script is one line by default (`require('__base__/script/freeplay/control.lua')`),
 so the broadcast appends cleanly.
 
-Recommendation: keep the logic in one file and ship it both ways — the mod for
-local development (settings UI, fast reload), the scenario for any server with
-real players on it. Not yet done; the mod is the only target today.
+**Both targets ship from one file.** `mod/broadcast.lua` is the whole
+implementation; `mod/control.lua` is a thin wrapper feeding it mod settings, and
+`scripts/make-scenario.py` copies the same file into a save beside a generated
+`control.lua`. Switch the dev server between them:
+
+```bash
+bash scripts/dev.sh softmod && bash scripts/dev.sh restart   # no client download
+bash scripts/dev.sh mod     && bash scripts/dev.sh restart   # mod, settings UI
+```
+
+Because the softmod target shares its script with freeplay, `broadcast.lua` must
+never register `on_init`, `on_load`, `on_configuration_changed`, or entity
+events — only one handler per event may exist, so registering them would
+silently clobber the scenario's own. Handlers go at load scope instead
+(`control.lua` runs on every load) and `storage` is initialised lazily. Verified:
+with the softmod running, `remote.interfaces` lists
+`factorio-broadcast, freeplay, space_finish_script` — freeplay survived intact.
 
 ## Development pipeline
 
@@ -114,6 +128,8 @@ wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/ideku/factorio-broadcast && bash scri
 | `dev.sh rcon-lua <file>` | Runs a Lua *file* — avoids shell quoting entirely. |
 | `dev.sh sidecar` / `sidecar-stop` | Sidecar lifecycle. |
 | `dev.sh reset-save` | Fresh save from the pristine source; needed after changing a setting default. |
+| `dev.sh softmod` / `mod` | Switch target. `softmod` rebuilds the scenario save from `mod/broadcast.lua` first; both need a `restart` to take effect. |
+| `dev.sh mode` | Which target the next start will use. |
 
 The edit loop is **edit `mod/control.lua` → `dev.sh restart` → assert**, about
 15 seconds wall clock, of which ~5 s is loading the 24 MB save.
@@ -130,9 +146,9 @@ node scripts/udp-tap.js 41234 5                               # raw datagrams, u
 ### Layout
 
 ```
-mod/          the Factorio mod (info.json, control.lua, settings.lua)
+mod/          broadcast.lua is the implementation; control.lua wraps it as a mod
 sidecar/      Node 22 + TypeScript, no dependencies, no build step
-scripts/      dev.sh (WSL driver), rcon.js, udp-tap.js, probe-payload.lua
+scripts/      dev.sh (WSL driver), make-scenario.py (softmod build), rcon.js, udp-tap.js
 dev/          gitignored: Windows-side scratch instance
 ~/fb/         in WSL: factorio/ (headless), node/, instance/ (save, mods, logs)
 ```
