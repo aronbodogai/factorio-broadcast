@@ -63,6 +63,38 @@ Things that cost time to find. All verified on 2.0.77.
 
 ---
 
+## Shipping it: mod vs scenario
+
+The question is whether joining clients have to install anything. They do for a
+mod, and they do not for a scenario.
+
+| | Mod | Scenario script ("softmod") |
+|---|---|---|
+| Client install | **Required.** Every peer must have the identical mod; the checksum must match. Clients can auto-sync only from the mod portal, so it must be published. | **None.** The scenario script lives inside the save and is transmitted to joining clients automatically. |
+| Config | `settings.lua`, with in-game settings UI | constants in the script, or a console/remote call |
+| Prototypes | can add them | cannot — script stage only |
+| Updating | bump version, clients re-sync | edit the save's `control.lua` and reload |
+
+**Verified working**, not just researched — `scripts/scenario-test.sh` builds a
+copy of the save whose `control.lua` calls `helpers.send_udp`, runs it against a
+mod directory containing only `base`, `elevated-rails`, `quality` and
+`space-age`, and taps the socket:
+
+```
+--- mods actually loaded ---
+Loading mod core / base / elevated-rails / quality / space-age    (no factorio-broadcast)
+--- tapping udp 41235 for 6s (no mod installed) ---
+25B  ×6   →  total 6 datagrams in 6s
+```
+
+So `helpers.send_udp` works from a scenario script with no mod present. A save's
+scenario script is one line by default (`require('__base__/script/freeplay/control.lua')`),
+so the broadcast appends cleanly.
+
+Recommendation: keep the logic in one file and ship it both ways — the mod for
+local development (settings UI, fast reload), the scenario for any server with
+real players on it. Not yet done; the mod is the only target today.
+
 ## Development pipeline
 
 Everything runs from Windows via `wsl.exe`; the repo lives on the Windows side
