@@ -1,0 +1,14 @@
+{
+  "name": "factorio-broadcast-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Receives UDP snapshots from the factorio-broadcast mod and serves them over HTTP/SSE.",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node src/index.ts",
+    "typecheck": "tsc --noEmit"
+  }
+}
