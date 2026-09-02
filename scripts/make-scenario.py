@@ -25,6 +25,9 @@ require('broadcast').setup(function()
     port = {port},
     interval = {interval},
     rescan_seconds = {rescan},
+    windows = '{windows}',
+    history_items = {history_items},
+    history_every = {history_every},
   }}
 end)
 """
@@ -37,6 +40,9 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=41234)
     parser.add_argument("--interval", type=int, default=60)
     parser.add_argument("--rescan", type=int, default=300)
+    parser.add_argument("--windows", default="5s,1m,10m,1h")
+    parser.add_argument("--history-items", type=int, default=5)
+    parser.add_argument("--history-every", type=int, default=5)
     args = parser.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -61,7 +67,13 @@ def main() -> int:
             control = control.split(MARKER)[0].rstrip() + "\n"
 
         control += TEMPLATE.format(
-            marker=MARKER, port=args.port, interval=args.interval, rescan=args.rescan
+            marker=MARKER,
+            port=args.port,
+            interval=args.interval,
+            rescan=args.rescan,
+            windows=args.windows,
+            history_items=args.history_items,
+            history_every=args.history_every,
         )
 
         if os.path.exists(args.output):

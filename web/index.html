@@ -17,6 +17,9 @@
     --border:         rgba(11, 11, 11, 0.10);
     --series-1:       #2a78d6;
     --series-2:       #eb6834;
+    --series-3:       #1baf7a;
+    --series-4:       #eda100;
+    --series-5:       #e87ba4;
     --track:          #eeede8;
     --good:           #0ca30c;
     --warning:        #fab219;
@@ -35,6 +38,9 @@
       --border:         rgba(255, 255, 255, 0.10);
       --series-1:       #3987e5;
       --series-2:       #d95926;
+      --series-3:       #199e70;
+      --series-4:       #c98500;
+      --series-5:       #d55181;
       --track:          #262624;
     }
   }
@@ -50,6 +56,9 @@
     --border:         rgba(255, 255, 255, 0.10);
     --series-1:       #3987e5;
     --series-2:       #d95926;
+    --series-3:       #199e70;
+    --series-4:       #c98500;
+    --series-5:       #d55181;
     --track:          #262624;
   }
 
@@ -227,6 +236,66 @@
 
   .empty { font-size: 12px; color: var(--text-muted); padding: 6px 0; }
 
+  /* Window filter: one row above the charts. */
+  .filters {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  .filters .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.055em;
+    color: var(--text-muted);
+  }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    appearance: none;
+    background: var(--surface);
+    border: 0;
+    border-left: 1px solid var(--border);
+    padding: 5px 11px;
+    font: inherit;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .seg button:first-child { border-left: 0; }
+  .seg button:hover { color: var(--text-primary); }
+  .seg button[aria-pressed="true"] { background: var(--series-1); color: #fff; font-weight: 600; }
+
+  /* Chart */
+  .chart-wrap { position: relative; }
+  .chart { display: block; width: 100%; height: auto; }
+  .chart .grid { stroke: var(--grid); stroke-width: 1; }
+  .chart .axis { stroke: var(--baseline); stroke-width: 1; }
+  .chart .tick-label { fill: var(--text-muted); font-size: 9px; font-variant-numeric: tabular-nums; }
+  .chart .line { fill: none; stroke-width: 2; }
+  .chart .crosshair { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 11px; }
+  .legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+
+  .tip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 7px 9px;
+    font-size: 11px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    white-space: nowrap;
+    z-index: 2;
+  }
+  .tip .when { color: var(--text-muted); margin-bottom: 4px; }
+  .tip .row { display: flex; align-items: center; gap: 6px; }
+  .tip .row .v { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+
   table { border-collapse: collapse; width: 100%; font-size: 12px; }
   th, td { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--grid); }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -249,6 +318,26 @@
 
   <div class="tabs" id="tabs" role="tablist"></div>
 
+  <div class="filters">
+    <span class="label">Window</span>
+    <span class="seg" id="windows"></span>
+    <span class="meta" id="window-note"></span>
+  </div>
+
+  <section class="card" style="margin-bottom:14px">
+    <h2>Production over time</h2>
+    <div class="hint" id="chart-hint">the game's own graph samples</div>
+    <div class="chart-wrap" id="chart-wrap">
+      <svg class="chart" id="chart" viewBox="0 0 600 210" role="img" aria-label="Production over time"></svg>
+      <div class="tip" id="tip" hidden></div>
+    </div>
+    <div class="legend" id="chart-legend"></div>
+    <details>
+      <summary>Table view</summary>
+      <div class="scroll"><table id="chart-table"></table></div>
+    </details>
+  </section>
+
   <div class="grid2">
     <section class="card">
       <h2>Electricity</h2>
@@ -258,7 +347,7 @@
 
     <section class="card">
       <h2>Items produced</h2>
-      <div class="hint">per minute, last 60 s window</div>
+      <div class="hint window-hint">per minute</div>
       <div class="bars" id="produced"></div>
       <details>
         <summary>Table view</summary>
@@ -268,7 +357,7 @@
 
     <section class="card">
       <h2>Items consumed</h2>
-      <div class="hint">per minute, last 60 s window</div>
+      <div class="hint window-hint">per minute</div>
       <div class="bars" id="consumed"></div>
       <details>
         <summary>Table view</summary>
@@ -278,7 +367,7 @@
 
     <section class="card">
       <h2>Fluids produced</h2>
-      <div class="hint">per minute, last 60 s window</div>
+      <div class="hint window-hint">per minute</div>
       <div class="bars" id="fluids"></div>
     </section>
   </div>
@@ -290,9 +379,20 @@
 'use strict';
 
 const TOP_N = 12;
+const CHART_SERIES = 5;
+
+// How much wall-clock each statistics window covers. Each window holds 300
+// samples spread across this span.
+const WINDOW_SPAN = {
+  '5s': '5 s', '1m': '1 min', '10m': '10 min', '1h': '1 h',
+  '10h': '10 h', '50h': '50 h', '250h': '250 h', '1000h': '1000 h',
+};
+
 let snapshot = null;
 let surface = null;
+let selectedWindow = null;
 let lastAt = 0;
+let hoverIndex = null;
 
 // ---- formatting -----------------------------------------------------------
 
@@ -313,6 +413,14 @@ function rate(n) {
 
 function count(n) {
   return Math.round(n).toLocaleString();
+}
+
+/** Axis ticks are compact, not precise: 0, 12k, 1.2M. */
+function axisLabel(v) {
+  if (v === 0) return '0';
+  if (v >= 1e6) return (v / 1e6).toFixed(v >= 1e7 ? 0 : 1) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(v >= 1e4 ? 0 : 1) + 'k';
+  return String(Math.round(v));
 }
 
 function pretty(name) {
@@ -407,6 +515,127 @@ function renderPower(el, networks) {
   }).join('');
 }
 
+// Colour follows the item, never its rank: the mod sends whichever items are
+// currently busiest, so without this a series would change colour the moment
+// two items swapped places.
+const colourSlots = new Map();
+
+function assignSlots(surfaceName, names) {
+  const key = (n) => `${surfaceName}|${n}`;
+  const used = new Set();
+  const out = names.map(() => null);
+
+  // Keep an item's existing colour whenever that slot is still free.
+  names.forEach((name, i) => {
+    const slot = colourSlots.get(key(name));
+    if (slot !== undefined && !used.has(slot)) {
+      used.add(slot);
+      out[i] = slot;
+    }
+  });
+
+  names.forEach((name, i) => {
+    if (out[i] !== null) return;
+    let slot = 0;
+    while (used.has(slot)) slot++;
+    used.add(slot);
+    colourSlots.set(key(name), slot);
+    out[i] = slot;
+  });
+
+  return out;
+}
+
+/** Line chart over the game's own 300 graph samples for the selected window. */
+function renderChart(series, window) {
+  const svg = document.getElementById('chart');
+  const legend = document.getElementById('chart-legend');
+  const names = Object.keys(series).slice(0, CHART_SERIES);
+
+  if (!names.length) {
+    svg.innerHTML = '';
+    legend.innerHTML = '<div class="empty">No graph samples yet — history is sent every few seconds.</div>';
+    document.getElementById('chart-table').innerHTML = '';
+    return;
+  }
+
+  const W = 600, H = 210, L = 46, R = 8, T = 10, B = 20;
+  const points = Math.max(...names.map((n) => series[n].length));
+  const max = Math.max(...names.flatMap((n) => series[n]), 1);
+  // Round the top of the scale up to something readable.
+  const step = Math.pow(10, Math.floor(Math.log10(max)));
+  const niceMax = Math.ceil(max / step) * step;
+
+  const x = (i) => L + (i / Math.max(1, points - 1)) * (W - L - R);
+  const y = (v) => T + (1 - v / niceMax) * (H - T - B);
+
+  const gridlines = [0, 0.5, 1].map((f) => {
+    const value = niceMax * f;
+    const yy = y(value);
+    return `<line class="grid" x1="${L}" y1="${yy}" x2="${W - R}" y2="${yy}"/>
+      <text class="tick-label" x="${L - 6}" y="${yy + 3}" text-anchor="end">${axisLabel(value)}</text>`;
+  }).join('');
+
+  const slots = assignSlots(surface, names);
+
+  const lines = names.map((name, i) => {
+    const values = series[name];
+    const d = values.map((v, idx) => `${idx === 0 ? 'M' : 'L'}${x(idx).toFixed(1)},${y(v).toFixed(1)}`).join('');
+    return `<path class="line" d="${d}" stroke="var(--series-${slots[i] + 1})" vector-effect="non-scaling-stroke"/>`;
+  }).join('');
+
+  const cross = hoverIndex === null ? '' :
+    `<line class="crosshair" x1="${x(hoverIndex)}" y1="${T}" x2="${x(hoverIndex)}" y2="${H - B}"/>`;
+
+  svg.innerHTML = `${gridlines}
+    <line class="axis" x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}"/>
+    ${lines}${cross}
+    <text class="tick-label" x="${L}" y="${H - 6}">−${WINDOW_SPAN[window] || window}</text>
+    <text class="tick-label" x="${W - R}" y="${H - 6}" text-anchor="end">now</text>`;
+
+  // Identity is never colour-alone: every series is named here, which also
+  // provides the relief the light-mode palette requires.
+  legend.innerHTML = names.map((name, i) =>
+    `<span class="legend-item"><span class="swatch" style="background:var(--series-${slots[i] + 1})"></span>${pretty(name)}</span>`
+  ).join('');
+
+  document.getElementById('chart-table').innerHTML =
+    `<thead><tr><th>Item</th><th class="num">Now</th><th class="num">Peak</th><th class="num">Mean</th></tr></thead><tbody>` +
+    names.map((n) => {
+      const v = series[n];
+      const mean = v.reduce((a, b) => a + b, 0) / (v.length || 1);
+      return `<tr><td>${pretty(n)}</td><td class="num">${rate(v[v.length - 1] ?? 0)}</td>` +
+             `<td class="num">${rate(Math.max(...v))}</td><td class="num">${rate(mean)}</td></tr>`;
+    }).join('') + '</tbody>';
+
+  svg.dataset.points = String(points);
+  svg.dataset.names = JSON.stringify(names);
+  svg.dataset.slots = JSON.stringify(slots);
+}
+
+function renderTip(series, window) {
+  const tip = document.getElementById('tip');
+  const svg = document.getElementById('chart');
+  const names = JSON.parse(svg.dataset.names || '[]');
+  const slots = JSON.parse(svg.dataset.slots || '[]');
+  if (hoverIndex === null || !names.length) { tip.hidden = true; return; }
+
+  const points = Number(svg.dataset.points || 1);
+  const ago = points - 1 - hoverIndex;
+  tip.hidden = false;
+  tip.innerHTML =
+    `<div class="when">${ago === 0 ? 'now' : `${((ago / (points - 1)) * 100).toFixed(0)}% of ${WINDOW_SPAN[window] || window} ago`}</div>` +
+    names.map((n, i) =>
+      `<div class="row"><span class="swatch" style="background:var(--series-${slots[i] + 1})"></span>${pretty(n)}<span class="v">${rate(series[n][hoverIndex] ?? 0)}</span></div>`
+    ).join('');
+
+  const wrap = document.getElementById('chart-wrap');
+  const frac = hoverIndex / Math.max(1, points - 1);
+  const left = 46 / 600 * wrap.clientWidth + frac * ((600 - 46 - 8) / 600) * wrap.clientWidth;
+  tip.style.left = Math.min(wrap.clientWidth - tip.offsetWidth - 4, left + 10) + 'px';
+  tip.style.top = '6px';
+}
+
 function render() {
   if (!snapshot) return;
   const names = snapshot.meta.surfaceNames || Object.keys(snapshot.surfaces);
@@ -429,7 +658,30 @@ function render() {
   const sat = produced > 0 ? Math.min(100, (consumed / produced) * 100) : 0;
   const research = m.research;
 
+  // Which statistics window the rates and the chart are read from.
+  const windows = (m.windows && m.windows.length) ? m.windows : [m.baseWindow || '1m'];
+  if (!selectedWindow || !windows.includes(selectedWindow)) selectedWindow = m.baseWindow || windows[0];
+  document.getElementById('windows').innerHTML = windows.map((w) =>
+    `<button data-window="${w}" aria-pressed="${w === selectedWindow}">${w}</button>`).join('');
+  document.getElementById('window-note').textContent =
+    `averaged over the last ${WINDOW_SPAN[selectedWindow] || selectedWindow}`;
+  for (const hint of document.querySelectorAll('.window-hint')) {
+    hint.textContent = `per minute, averaged over ${WINDOW_SPAN[selectedWindow] || selectedWindow}`;
+  }
+
+  const items = (s && s.items[selectedWindow]) || { produced: {}, consumed: {} };
+  const fluids = (s && s.fluids[selectedWindow]) || { produced: {}, consumed: {} };
+
+  // The game exposes no UPS of its own; the sidecar derives it from how far the
+  // tick advances per second of wall clock.
+  const ups = snapshot.ups;
+  const target = 60 * (m.speed || 1);
+  const upsSub = ups === null ? 'measuring…'
+    : ups >= target - 2 ? `at the ${target} target`
+    : `below the ${target} target`;
+
   document.getElementById('tiles').innerHTML = [
+    tile('UPS', ups === null ? '—' : ups.toFixed(1), upsSub),
     tile('Power produced', watts(produced), pretty(surface)),
     tile('Power drawn', watts(consumed), sat.toFixed(0) + '% satisfied'),
     tile('Pollution', s ? count(s.pollution) : '0', pretty(surface)),
@@ -441,16 +693,22 @@ function render() {
   ].join('');
 
   document.getElementById('power-hint').textContent =
-    s && s.power.length ? `${s.power.length} network(s) on ${pretty(surface)}` : 'per electric network';
+    s && s.power.length ? `${s.power.length} network(s) on ${pretty(surface)} · 1m window` : 'per electric network';
   renderPower(document.getElementById('power'), s ? s.power : []);
 
-  const prod = topEntries(s && s.items.produced, TOP_N);
-  const cons = topEntries(s && s.items.consumed, TOP_N);
+  const prod = topEntries(items.produced, TOP_N);
+  const cons = topEntries(items.consumed, TOP_N);
   renderBars(document.getElementById('produced'), prod, rate, false);
   renderBars(document.getElementById('consumed'), cons, rate, true);
   renderTable(document.getElementById('produced-table'), prod, 'per minute');
   renderTable(document.getElementById('consumed-table'), cons, 'per minute');
-  renderBars(document.getElementById('fluids'), topEntries(s && s.fluids.produced, 8), rate, false);
+  renderBars(document.getElementById('fluids'), topEntries(fluids.produced, 8), rate, false);
+
+  const series = ((snapshot.history || {})[surface] || {})[selectedWindow] || {};
+  document.getElementById('chart-hint').textContent =
+    `${pretty(surface)} · the game's own 300 graph samples across ${WINDOW_SPAN[selectedWindow] || selectedWindow}`;
+  renderChart(series, selectedWindow);
+  renderTip(series, selectedWindow);
 
   document.getElementById('clock').textContent =
     `tick ${snapshot.tick.toLocaleString()}` + (m.paused ? ' · paused' : '') +
@@ -463,6 +721,34 @@ document.getElementById('tabs').addEventListener('click', (event) => {
   const tab = event.target.closest('.tab');
   if (!tab) return;
   surface = tab.dataset.surface;
+  hoverIndex = null;
+  render();
+});
+
+document.getElementById('windows').addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-window]');
+  if (!button) return;
+  selectedWindow = button.dataset.window;
+  hoverIndex = null;
+  render();
+});
+
+// Crosshair: the hit target is the whole plot, not the 2px line.
+const chart = document.getElementById('chart');
+chart.addEventListener('mousemove', (event) => {
+  const box = chart.getBoundingClientRect();
+  const points = Number(chart.dataset.points || 0);
+  if (!points) return;
+  const L = 46 / 600 * box.width;
+  const plot = (600 - 46 - 8) / 600 * box.width;
+  const frac = (event.clientX - box.left - L) / plot;
+  const next = Math.round(Math.min(1, Math.max(0, frac)) * (points - 1));
+  if (next === hoverIndex) return;
+  hoverIndex = next;
+  render();
+});
+chart.addEventListener('mouseleave', () => {
+  hoverIndex = null;
   render();
 });
 

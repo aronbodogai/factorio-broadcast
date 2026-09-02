@@ -44,8 +44,10 @@ type Datagram = { k: 'meta' | 'surface'; v: number; t: number; [key: string]: un
 type Snapshot = {
   tick: number;
   receivedAt: number;
+  ups: number | null;
   meta: Record<string, unknown>;
   surfaces: Record<string, unknown>;
+  history: Record<string, Record<string, Record<string, number[]>>>;
 };
 
 let latest: Snapshot | null = null;
@@ -53,20 +55,41 @@ let partial: { tick: number; surfaces: Record<string, unknown> } | null = null;
 const clients = new Set<http.ServerResponse>();
 const stats = { packets: 0, snapshots: 0, bytes: 0, lastError: null as string | null };
 
+// Graph series arrive on their own slower cadence, one window per burst, so they
+// are kept here and merged into every snapshot rather than expiring with one.
+const history: Record<string, Record<string, Record<string, number[]>>> = {};
+
+// The game exposes no UPS reading - LuaProfiler measures real time but can only
+// be written to the log, never read back into Lua. Measuring it out here is both
+// exact and free: ticks advanced per second of wall clock.
+const UPS_WINDOW = 8;
+const ticks: Array<{ tick: number; at: number }> = [];
+
+function currentUps(): number | null {
+  if (ticks.length < 2) return null;
+  const first = ticks[0];
+  const last = ticks[ticks.length - 1];
+  const seconds = (last.at - first.at) / 1000;
+  if (seconds <= 0) return null;
+  return (last.tick - first.tick) / seconds;
+}
+
+/** Protocol 2 reports each flow once per statistics window: {"1m": {input, output}}. */
+function normaliseFlowWindows(value: unknown) {
+  const out: Record<string, { produced: Record<string, number>; consumed: Record<string, number> }> = {};
+  for (const [window, flow] of Object.entries((value ?? {}) as Record<string, any>)) {
+    out[window] = { produced: unMap(flow?.input), consumed: unMap(flow?.output) };
+  }
+  return out;
+}
+
 function normaliseSurface(d: Datagram) {
   return {
     name: d.name,
     platform: d.platform,
     pollution: un(d.pollution as number),
-    truncated: d.truncated ?? false,
-    items: {
-      produced: unMap((d.items as any)?.input),
-      consumed: unMap((d.items as any)?.output),
-    },
-    fluids: {
-      produced: unMap((d.fluids as any)?.input),
-      consumed: unMap((d.fluids as any)?.output),
-    },
+    items: normaliseFlowWindows(d.items),
+    fluids: normaliseFlowWindows(d.fluids),
     power: asArray<any>(d.power).map((n) => ({
       id: n.id,
       producedW: watts(n.produced_j),
@@ -87,9 +110,18 @@ function finalise(meta: Datagram) {
   const surfaces = partial && partial.tick === meta.t ? partial.surfaces : {};
   partial = null;
 
+  const now = Date.now();
+  // A reloaded save can move the tick backwards; start the measurement over
+  // rather than reporting a negative rate.
+  if (ticks.length && meta.t < ticks[ticks.length - 1].tick) ticks.length = 0;
+  ticks.push({ tick: meta.t, at: now });
+  while (ticks.length > UPS_WINDOW) ticks.shift();
+
   latest = {
     tick: meta.t,
-    receivedAt: Date.now(),
+    receivedAt: now,
+    ups: currentUps(),
+    history,
     meta: {
       modVersion: meta.mod_version,
       speed: un(meta.speed as number),
@@ -102,6 +134,8 @@ function finalise(meta: Datagram) {
       playersOnline: meta.players_online,
       players: asArray(meta.players),
       surfaceNames: asArray(meta.surfaces),
+      windows: asArray<string>(meta.windows),
+      baseWindow: meta.base_window ?? '1m',
     },
     surfaces,
   };
@@ -168,6 +202,16 @@ sock.on('message', (buf) => {
     // Surface datagrams always precede the meta datagram for the same tick.
     if (!partial || partial.tick !== d.t) partial = { tick: d.t, surfaces: {} };
     partial.surfaces[String(d.name)] = normaliseSurface(d);
+  } else if (d.k === 'history') {
+    const surface = String(d.name);
+    const window = String(d.window);
+    const series: Record<string, number[]> = {};
+    for (const [item, values] of Object.entries((d.series ?? {}) as Record<string, number[]>)) {
+      // Index 0 is the most recent sample; reverse so charts read left to right.
+      series[item] = asArray<number>(values).map(un).reverse();
+    }
+    history[surface] = history[surface] ?? {};
+    history[surface][window] = series;
   } else if (d.k === 'meta') {
     finalise(d);
   }
@@ -216,6 +260,7 @@ const server = http.createServer((req, res) => {
         ...stats,
         clients: clients.size,
         lastTick: latest?.tick ?? null,
+        ups: currentUps(),
         ageMs: latest ? Date.now() - latest.receivedAt : null,
       }),
     );

@@ -63,6 +63,36 @@ Things that cost time to find. All verified on 2.0.77.
 
 ---
 
+## Statistics windows, graphs and UPS
+
+`get_flow_count` takes a `precision_index` and an optional `sample_index`, and
+the docs are explicit that the samples are *"the data used to generate the
+statistics graphs"* — each precision level holds **300 samples** spanning its
+whole window. So the in-game graphs are readable verbatim, not approximated.
+
+The mod reports every window named in `fb-windows` (default `5s,1m,10m,1h`;
+`10h`, `50h`, `250h`, `1000h` also valid) and sends graph series for the busiest
+`fb-history-items` items, one window per burst, every `fb-history-every`
+snapshots. Rotating keeps the extra bandwidth flat however many windows are on.
+
+Measured on the game thread with `LuaProfiler`, on a base with 138 produced items:
+
+| Work | Calls | Duration |
+|---|---|---|
+| 138 items × 1 window | 138 | 0.18–0.21 ms |
+| 138 items × all 8 windows | 1104 | 1.30–1.78 ms |
+| 5 items × 300 graph samples | 1500 | 0.97–1.20 ms |
+
+A tick is 16.67 ms at 60 UPS and sampling runs once per *second*, so all of it
+together costs well under 1% of a second. Payload, not CPU, is the limit: a
+snapshot with four windows plus a history burst is ~19 KB across ~16 datagrams.
+
+**UPS is measured in the sidecar**, not the mod. Factorio exposes no UPS to Lua —
+`LuaProfiler` measures real time but can only be written to the log, never read
+back — so the sidecar derives it from how far the tick advances per second of
+wall clock. Cross-checked against a direct two-point `game.tick` measurement:
+46.25 measured vs 45.07 reported. (`scripts/ups-check.sh` runs that check.)
+
 ## Shipping it: mod vs scenario
 
 The question is whether joining clients have to install anything. They do for a

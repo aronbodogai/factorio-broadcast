@@ -8,6 +8,9 @@ broadcast.setup(function()
     port = settings.global["fb-udp-port"].value,
     interval = settings.global["fb-interval-ticks"].value,
     rescan_seconds = settings.global["fb-network-rescan-seconds"].value,
+    windows = settings.global["fb-windows"].value,
+    history_items = settings.global["fb-history-items"].value,
+    history_every = settings.global["fb-history-every"].value,
   }
 end)
 
