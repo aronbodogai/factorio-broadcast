@@ -1,0 +1,10 @@
+* text=auto
+
+# Run by bash inside WSL2 and by Factorio's Lua; CRLF breaks both.
+*.sh   text eol=lf
+*.lua  text eol=lf
+*.js   text eol=lf
+*.ts   text eol=lf
+
+# Run by PowerShell on Windows.
+*.ps1  text eol=crlf
