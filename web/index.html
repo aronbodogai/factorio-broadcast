@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factorio Broadcast</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:           #f9f9f7;
+    --surface:        #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11, 11, 11, 0.10);
+    --series-1:       #2a78d6;
+    --series-2:       #eb6834;
+    --track:          #eeede8;
+    --good:           #0ca30c;
+    --warning:        #fab219;
+    --critical:       #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page:           #0d0d0d;
+      --surface:        #1a1a19;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:           #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255, 255, 255, 0.10);
+      --series-1:       #3987e5;
+      --series-2:       #d95926;
+      --track:          #262624;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:           #0d0d0d;
+    --surface:        #1a1a19;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --grid:           #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255, 255, 255, 0.10);
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --track:          #262624;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 20px 64px; }
+
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+  h1 { font-size: 19px; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-left: auto;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+  .dot.live { background: var(--good); }
+  .dot.stale { background: var(--warning); }
+  .dot.down { background: var(--critical); }
+
+  .meta { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+  /* KPI row */
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+    gap: 10px;
+    margin-bottom: 22px;
+  }
+  .tile {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 13px 15px;
+  }
+  .tile .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.055em;
+    color: var(--text-muted);
+    margin-bottom: 5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tile .value { font-size: 25px; font-weight: 600; line-height: 1.15; letter-spacing: -0.02em; }
+  .tile .sub { font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
+
+  /* Surface tabs */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--grid);
+    margin-bottom: 18px;
+  }
+  .tab {
+    appearance: none;
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    padding: 8px 12px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: 6px 6px 0 0;
+  }
+  .tab:hover { background: var(--track); color: var(--text-primary); }
+  .tab[aria-selected="true"] {
+    color: var(--text-primary);
+    border-bottom-color: var(--series-1);
+    font-weight: 600;
+  }
+  .tab .count { color: var(--text-muted); font-weight: 400; font-size: 11px; margin-left: 5px; }
+
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 15px 17px 17px;
+  }
+  .card h2 {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0 0 2px;
+    letter-spacing: -0.005em;
+  }
+  .card .hint { font-size: 11px; color: var(--text-muted); margin-bottom: 13px; }
+
+  /* Ranked bars */
+  .bars { display: flex; flex-direction: column; gap: 2px; }
+  .bar-row {
+    display: grid;
+    grid-template-columns: minmax(96px, 34%) 1fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 2px 4px;
+    border-radius: 5px;
+    cursor: default;
+  }
+  .bar-row:hover { background: var(--track); }
+  .bar-name {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Both must be block: an inline span ignores width and height entirely. */
+  .bar-track { display: block; height: 11px; background: var(--track); border-radius: 4px; overflow: hidden; }
+  .bar-fill { display: block; height: 100%; border-radius: 4px; background: var(--series-1); }
+  .bar-fill.alt { background: var(--series-2); }
+
+  .bar-group {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.055em;
+    color: var(--text-muted);
+    margin: 9px 0 3px;
+  }
+  .bar-group:first-child { margin-top: 0; }
+  .bar-value {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+    min-width: 72px;
+    text-align: right;
+  }
+
+  /* Power */
+  .net { padding-top: 13px; margin-top: 13px; border-top: 1px solid var(--grid); }
+  .net:first-of-type { padding-top: 0; margin-top: 0; border-top: 0; }
+  .net-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 9px;
+  }
+  .net-title { font-size: 12px; font-weight: 600; }
+  .net-nums { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; margin-left: auto; }
+  .sat {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+  }
+  .sat.good     { color: var(--good); }
+  .sat.warning  { color: var(--warning); }
+  .sat.critical { color: var(--critical); }
+
+  .empty { font-size: 12px; color: var(--text-muted); padding: 6px 0; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--grid); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  details { margin-top: 12px; }
+  summary { font-size: 12px; color: var(--text-secondary); cursor: pointer; }
+  .scroll { overflow-x: auto; }
+
+  footer { margin-top: 26px; font-size: 11px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Factorio Broadcast</h1>
+    <span class="meta" id="clock">—</span>
+    <span class="status"><span class="dot" id="dot"></span><span id="conn">connecting…</span></span>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="tabs" id="tabs" role="tablist"></div>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>Electricity</h2>
+      <div class="hint" id="power-hint">per electric network</div>
+      <div id="power"></div>
+    </section>
+
+    <section class="card">
+      <h2>Items produced</h2>
+      <div class="hint">per minute, last 60 s window</div>
+      <div class="bars" id="produced"></div>
+      <details>
+        <summary>Table view</summary>
+        <div class="scroll"><table id="produced-table"></table></div>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>Items consumed</h2>
+      <div class="hint">per minute, last 60 s window</div>
+      <div class="bars" id="consumed"></div>
+      <details>
+        <summary>Table view</summary>
+        <div class="scroll"><table id="consumed-table"></table></div>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>Fluids produced</h2>
+      <div class="hint">per minute, last 60 s window</div>
+      <div class="bars" id="fluids"></div>
+    </section>
+  </div>
+
+  <footer id="foot">—</footer>
+</div>
+
+<script>
+'use strict';
+
+const TOP_N = 12;
+let snapshot = null;
+let surface = null;
+let lastAt = 0;
+
+// ---- formatting -----------------------------------------------------------
+
+function watts(w) {
+  const abs = Math.abs(w);
+  if (abs >= 1e9) return (w / 1e9).toFixed(1) + ' GW';
+  if (abs >= 1e6) return (w / 1e6).toFixed(1) + ' MW';
+  if (abs >= 1e3) return (w / 1e3).toFixed(1) + ' kW';
+  return Math.round(w) + ' W';
+}
+
+function rate(n) {
+  if (n >= 1000) return Math.round(n).toLocaleString();
+  if (n >= 100) return n.toFixed(0);
+  if (n >= 10) return n.toFixed(1);
+  return n.toFixed(2);
+}
+
+function count(n) {
+  return Math.round(n).toLocaleString();
+}
+
+function pretty(name) {
+  return name.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase());
+}
+
+// ---- rendering ------------------------------------------------------------
+
+function tile(label, value, sub) {
+  return `<div class="tile">
+    <div class="label">${label}</div>
+    <div class="value">${value}</div>
+    ${sub ? `<div class="sub">${sub}</div>` : ''}
+  </div>`;
+}
+
+/** Ranked horizontal bars. One series per chart, so the title is the legend. */
+function renderBars(el, entries, format, alt) {
+  if (!entries.length) {
+    el.innerHTML = '<div class="empty">Nothing recorded in this window.</div>';
+    return;
+  }
+  const max = entries[0][1];
+  el.innerHTML = entries.map(([name, value]) => {
+    const pct = max > 0 ? Math.max(1.5, (value / max) * 100) : 0;
+    return `<div class="bar-row" title="${pretty(name)}: ${format(value)}">
+      <span class="bar-name">${pretty(name)}</span>
+      <span class="bar-track"><span class="bar-fill${alt ? ' alt' : ''}" style="width:${pct}%"></span></span>
+      <span class="bar-value">${format(value)}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderTable(el, entries, unit) {
+  if (!entries.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<thead><tr><th>Item</th><th class="num">${unit}</th></tr></thead><tbody>` +
+    entries.map(([n, v]) => `<tr><td>${pretty(n)}</td><td class="num">${rate(v)}</td></tr>`).join('') +
+    '</tbody>';
+}
+
+function topEntries(map, n) {
+  return Object.entries(map || {})
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n);
+}
+
+function satClass(pct) {
+  if (pct >= 99) return 'good';
+  if (pct >= 90) return 'warning';
+  return 'critical';
+}
+
+function renderPower(el, networks) {
+  const live = networks.filter((n) => n.producedW > 0 || n.consumedW > 0);
+  if (!live.length) {
+    el.innerHTML = '<div class="empty">No powered network on this surface.</div>';
+    return;
+  }
+  live.sort((a, b) => b.producedW - a.producedW);
+
+  el.innerHTML = live.map((net) => {
+    const cls = satClass(net.satisfaction);
+    // Icon + label, never colour alone.
+    const mark = cls === 'good' ? '✓' : cls === 'warning' ? '!' : '✕';
+    const producers = topEntries(net.producersW, 5);
+    const consumers = topEntries(net.consumersW, 6);
+    const scale = Math.max(
+      producers.length ? producers[0][1] : 0,
+      consumers.length ? consumers[0][1] : 0,
+    );
+    const row = (entries, alt) => entries.map(([name, value]) => {
+      const pct = scale > 0 ? Math.max(1.5, (value / scale) * 100) : 0;
+      return `<div class="bar-row" title="${pretty(name)}: ${watts(value)}">
+        <span class="bar-name">${pretty(name)}</span>
+        <span class="bar-track"><span class="bar-fill${alt ? ' alt' : ''}" style="width:${pct}%"></span></span>
+        <span class="bar-value">${watts(value)}</span>
+      </div>`;
+    }).join('');
+
+    return `<div class="net">
+      <div class="net-head">
+        <span class="net-title">Network ${net.id}</span>
+        <span class="sat ${cls}">${mark} ${net.satisfaction.toFixed(0)}% satisfied</span>
+        <span class="net-nums">${watts(net.producedW)} produced · ${watts(net.consumedW)} drawn</span>
+      </div>
+      <div class="bar-group">Producing</div>
+      <div class="bars">${row(producers, false) || '<div class="empty">—</div>'}</div>
+      <div class="bar-group">Drawing</div>
+      <div class="bars">${row(consumers, true) || '<div class="empty">—</div>'}</div>
+    </div>`;
+  }).join('');
+}
+
+function render() {
+  if (!snapshot) return;
+  const names = snapshot.meta.surfaceNames || Object.keys(snapshot.surfaces);
+  if (!surface || !snapshot.surfaces[surface]) surface = names[0];
+
+  // Tabs
+  document.getElementById('tabs').innerHTML = names.map((name) => {
+    const s = snapshot.surfaces[name];
+    const nets = s ? s.power.filter((n) => n.producedW > 0).length : 0;
+    return `<button class="tab" role="tab" data-surface="${name}"
+      aria-selected="${name === surface}">${pretty(name)}${nets ? `<span class="count">${nets}⚡</span>` : ''}</button>`;
+  }).join('');
+
+  const s = snapshot.surfaces[surface];
+  const m = snapshot.meta;
+
+  // Totals across every network on this surface.
+  const produced = s ? s.power.reduce((a, n) => a + n.producedW, 0) : 0;
+  const consumed = s ? s.power.reduce((a, n) => a + n.consumedW, 0) : 0;
+  const sat = produced > 0 ? Math.min(100, (consumed / produced) * 100) : 0;
+  const research = m.research;
+
+  document.getElementById('tiles').innerHTML = [
+    tile('Power produced', watts(produced), pretty(surface)),
+    tile('Power drawn', watts(consumed), sat.toFixed(0) + '% satisfied'),
+    tile('Pollution', s ? count(s.pollution) : '0', pretty(surface)),
+    tile('Research', research ? Math.round(research.progress) + '%' : '—',
+         research ? pretty(research.name) : 'nothing queued'),
+    tile('Rockets launched', count(m.rockets || 0), 'all surfaces'),
+    tile('Players online', String(m.playersOnline ?? 0),
+         (m.players || []).map((p) => p.name).join(', ') || 'nobody connected'),
+  ].join('');
+
+  document.getElementById('power-hint').textContent =
+    s && s.power.length ? `${s.power.length} network(s) on ${pretty(surface)}` : 'per electric network';
+  renderPower(document.getElementById('power'), s ? s.power : []);
+
+  const prod = topEntries(s && s.items.produced, TOP_N);
+  const cons = topEntries(s && s.items.consumed, TOP_N);
+  renderBars(document.getElementById('produced'), prod, rate, false);
+  renderBars(document.getElementById('consumed'), cons, rate, true);
+  renderTable(document.getElementById('produced-table'), prod, 'per minute');
+  renderTable(document.getElementById('consumed-table'), cons, 'per minute');
+  renderBars(document.getElementById('fluids'), topEntries(s && s.fluids.produced, 8), rate, false);
+
+  document.getElementById('clock').textContent =
+    `tick ${snapshot.tick.toLocaleString()}` + (m.paused ? ' · paused' : '') +
+    (m.speed && m.speed !== 1 ? ` · ${m.speed}× speed` : '');
+  document.getElementById('foot').textContent =
+    `mod ${m.modVersion} · evolution ${(m.evolution || 0).toFixed(1)}% · ${names.length} surfaces`;
+}
+
+document.getElementById('tabs').addEventListener('click', (event) => {
+  const tab = event.target.closest('.tab');
+  if (!tab) return;
+  surface = tab.dataset.surface;
+  render();
+});
+
+// ---- transport ------------------------------------------------------------
+
+function setStatus(cls, text) {
+  document.getElementById('dot').className = 'dot ' + cls;
+  document.getElementById('conn').textContent = text;
+}
+
+function connect() {
+  const source = new EventSource('/api/stream');
+
+  source.onmessage = (event) => {
+    try {
+      snapshot = JSON.parse(event.data);
+      lastAt = Date.now();
+      render();
+    } catch (err) {
+      setStatus('down', 'bad frame');
+    }
+  };
+
+  source.onopen = () => setStatus('live', 'live');
+
+  source.onerror = () => {
+    setStatus('down', 'reconnecting…');
+    source.close();
+    setTimeout(connect, 2000);
+  };
+}
+
+// The game can be paused or the server stopped while the stream stays open, so
+// age is tracked separately from connection state.
+setInterval(() => {
+  if (!lastAt) return;
+  const age = Date.now() - lastAt;
+  if (age > 5000) setStatus('stale', `no data for ${Math.round(age / 1000)}s`);
+  else if (age > 2500) setStatus('stale', 'lagging');
+  else setStatus('live', 'live');
+}, 1000);
+
+connect();
+</script>
+</body>
+</html>

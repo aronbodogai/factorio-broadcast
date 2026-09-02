@@ -5,6 +5,11 @@
 //   node src/index.ts
 import dgram from 'node:dgram';
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../web');
 
 const UDP_PORT = Number(process.env.FB_UDP_PORT ?? 41234);
 const UDP_HOST = process.env.FB_UDP_HOST ?? '127.0.0.1';
@@ -214,6 +219,27 @@ const server = http.createServer((req, res) => {
         ageMs: latest ? Date.now() - latest.receivedAt : null,
       }),
     );
+    return;
+  }
+
+  // The dashboard is served from here rather than opened as a file, so the page
+  // is same-origin with the API and EventSource needs no CORS dance.
+  const MIME: Record<string, string> = {
+    '.html': 'text/html; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.svg': 'image/svg+xml',
+  };
+  const rel = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
+  const file = path.join(WEB_ROOT, rel);
+
+  // Never serve outside the web root, whatever the request path claims.
+  if (file.startsWith(WEB_ROOT) && fs.existsSync(file) && fs.statSync(file).isFile()) {
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream',
+      'Cache-Control': 'no-store',
+    });
+    fs.createReadStream(file).pipe(res);
     return;
   }
 
