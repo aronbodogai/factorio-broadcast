@@ -18,25 +18,26 @@
     * no entity event subscriptions, for the same clobbering reason - electric
       networks are rediscovered on a timer instead.
 
-  Requires the game to be started with  --enable-lua-udp <port>  ; without that
-  flag helpers.send_udp does nothing.
-
-  Wire format (protocol 2)
+  Wire format (protocol 3)
   ------------------------
-  Each JSON object is split into datagrams of the form
+  Two JSON files in script-output, rewritten in place:
 
-    <id>|<index>|<total>|<chunk of the JSON text>
+    broadcast.json          the whole snapshot, once per interval
+    broadcast-history.json  the graph series, on a slower cadence
 
-  because helpers.send_udp silently discards anything over 1472 bytes. Three
-  kinds of object; "meta" and "surface" share a tick so the sidecar can group a
-  set of them into one snapshot:
+  This used to push datagrams with helpers.send_udp. It does not any more:
+  send_udp costs 8-31 ms PER CALL - a fixed cost, not proportional to payload -
+  and its silent 1472-byte ceiling forced roughly 17 calls per snapshot, so a
+  single snapshot blocked the game for ~140 ms. Measured against it,
+  helpers.write_file moves 20 KB in 0.6-1.0 ms and has no size limit, which is
+  20-100x cheaper for a payload that is 10x bigger.
 
-    {"k":"meta",    "v":2, "t":<tick>, ...}   exactly one per snapshot, sent last
-    {"k":"surface", "v":2, "t":<tick>, ...}   one per surface
-    {"k":"history", "v":2, "t":<tick>, ...}   one per surface, occasionally
+  The sidecar reads whichever file changed. A read can catch a half-written
+  file; the sidecar simply skips anything that fails to parse and picks up the
+  next write.
 
   Rates and energies are integers in HUNDREDTHS of their unit; the sidecar
-  divides by 100. Sending floats would be correct but helpers.table_to_json
+  divides by 100. Writing floats would be correct but helpers.table_to_json
   serialises them at full double precision, which triples the payload for nothing.
 
   Units, per the API docs: flow counts are normalised per-tick for electric
@@ -45,11 +46,10 @@
 
 local M = {}
 
-local PROTOCOL_VERSION = 2
+local PROTOCOL_VERSION = 3
 
--- Payload bytes per datagram. The measured ceiling is 1472 including the
--- "<id>|<index>|<total>|" header, so leave room for it.
-local CHUNK_BYTES = 1400
+local SNAPSHOT_FILE = "broadcast.json"
+local HISTORY_FILE = "broadcast-history.json"
 
 -- Each precision level holds 300 samples covering its whole window, which is
 -- exactly the data behind the in-game statistics graphs.
@@ -69,6 +69,14 @@ local WINDOWS = {
 -- The window the power breakdown and the "top items" ranking are taken from.
 local BASE_WINDOW = "1m"
 
+-- Windows long enough that re-reading them every snapshot is waste: a 1000-hour
+-- average does not move perceptibly in a second. These are refreshed on their
+-- own slower cadence and the sidecar keeps the last value it saw for each.
+local SLOW_WINDOWS = {
+  ["1h"] = true, ["10h"] = true, ["50h"] = true,
+  ["250h"] = true, ["1000h"] = true,
+}
+
 --- Set by setup(); returns the live configuration table.
 local get_config = nil
 
@@ -85,14 +93,14 @@ local function config()
   local c = get_config and get_config() or {}
   return {
     enabled = c.enabled ~= false,
-    port = c.port or 41234,
     interval = c.interval or 60,
     rescan_seconds = c.rescan_seconds or 300,
-    windows = split_windows(c.windows or "5s,1m,10m,1h"),
+    windows = split_windows(c.windows or "5s,1m,10m,1h,10h,50h,250h,1000h"),
     -- Graph series are large, so they go out on their own slower cadence and
     -- cover one window per burst, rotating through the configured windows.
     history_items = c.history_items or 5,
     history_every = c.history_every or 5,
+    slow_every = c.slow_every or 30,
   }
 end
 
@@ -222,18 +230,12 @@ local function read_logistics(force, surface_name)
   return out
 end
 
-local function send(port, payload)
+--- for_player 0 writes only on the server, which is what we want: on a
+--- multiplayer game every peer runs this script, and without it every client
+--- would write the file too.
+local function write(filename, payload)
   local json = helpers.table_to_json(payload)
-  local total = math.max(1, math.ceil(#json / CHUNK_BYTES))
-
-  storage.fb_seq = (storage.fb_seq or 0) + 1
-  local id = storage.fb_seq
-
-  for i = 1, total do
-    local part = string.sub(json, (i - 1) * CHUNK_BYTES + 1, i * CHUNK_BYTES)
-    helpers.send_udp(port, id .. "|" .. i .. "|" .. total .. "|" .. part, 0)
-  end
-
+  helpers.write_file(filename, json, false, 0)
   return #json
 end
 
@@ -252,8 +254,8 @@ local function top_names(flow_map, n)
   return out
 end
 
---- Returns the datagram size emitted per surface, which is the number that
---- decides whether a snapshot survives the UDP size ceiling.
+--- Writes one snapshot file, plus a history file on its slower cadence.
+--- Returns the bytes written per file.
 local function snapshot()
   local cfg = config()
   if not cfg.enabled then return end
@@ -266,8 +268,8 @@ local function snapshot()
     rescan_networks()
   end
 
-  -- One window's worth of graph series per burst, rotating, so the extra
-  -- bandwidth stays flat no matter how many windows are configured.
+  -- One window's worth of graph series per burst, rotating, so the extra work
+  -- stays flat no matter how many windows are configured.
   storage.fb_snapshot_n = (storage.fb_snapshot_n or 0) + 1
   local history_window = nil
   if cfg.history_items > 0 and storage.fb_snapshot_n % cfg.history_every == 0 then
@@ -275,26 +277,35 @@ local function snapshot()
     history_window = cfg.windows[cursor + 1]
   end
 
+  -- Long windows ride a slower cadence; the sidecar keeps the last value it saw
+  -- for each window, so a snapshot that omits them is not a gap.
+  local include_slow = storage.fb_snapshot_n % cfg.slow_every == 0
+  local windows_now = {}
+  for _, window in pairs(cfg.windows) do
+    if include_slow or not SLOW_WINDOWS[window] then
+      windows_now[#windows_now + 1] = window
+    end
+  end
+
   local sizes = {}
   local surface_names = {}
+  local surfaces = {}
+  local history = history_window and {} or nil
 
   for _, surface in pairs(game.surfaces) do
     local item_stats = force.get_item_production_statistics(surface)
-    local items = read_flow_windows(item_stats, cfg.windows)
+    local items = read_flow_windows(item_stats, windows_now)
 
     surface_names[#surface_names + 1] = surface.name
-    sizes[surface.name] = send(cfg.port, {
-      k = "surface",
-      v = PROTOCOL_VERSION,
-      t = tick,
+    surfaces[surface.name] = {
       name = surface.name,
       platform = surface.platform ~= nil,
       pollution = q(surface.get_total_pollution()),
       items = items,
-      fluids = read_flow_windows(force.get_fluid_production_statistics(surface), cfg.windows),
+      fluids = read_flow_windows(force.get_fluid_production_statistics(surface), windows_now),
       power = read_power(surface.name),
       logistics = read_logistics(force, surface.name),
-    })
+    }
 
     if history_window then
       local base = items[BASE_WINDOW] or items[cfg.windows[1]]
@@ -304,15 +315,7 @@ local function snapshot()
         for _, name in pairs(names) do
           series[name] = read_series(item_stats, name, history_window)
         end
-        sizes["history:" .. surface.name] = send(cfg.port, {
-          k = "history",
-          v = PROTOCOL_VERSION,
-          t = tick,
-          name = surface.name,
-          window = history_window,
-          samples = SAMPLES_PER_WINDOW,
-          series = series,
-        })
+        history[surface.name] = series
       end
     end
   end
@@ -334,16 +337,25 @@ local function snapshot()
 
   local nauvis = game.surfaces["nauvis"]
 
-  -- Sent last so the sidecar can treat "meta" as the end-of-snapshot marker.
-  sizes.meta = send(cfg.port, {
-    k = "meta",
+  if history_window then
+    sizes.history = write(HISTORY_FILE, {
+      v = PROTOCOL_VERSION,
+      t = tick,
+      window = history_window,
+      samples = SAMPLES_PER_WINDOW,
+      surfaces = history,
+    })
+  end
+
+  sizes.snapshot = write(SNAPSHOT_FILE, {
     v = PROTOCOL_VERSION,
     t = tick,
     -- Absent when running as a softmod, which is how the sidecar tells them apart.
     mod_version = script.active_mods["factorio-broadcast"] or "scenario",
     speed = q(game.speed),
     paused = game.tick_paused,
-    surfaces = surface_names,
+    surface_names = surface_names,
+    surfaces = surfaces,
     windows = cfg.windows,
     base_window = BASE_WINDOW,
     research = research,
@@ -405,7 +417,6 @@ function M.setup(config_source)
         version = script.active_mods["factorio-broadcast"] or "scenario",
         protocol = PROTOCOL_VERSION,
         tick = game.tick,
-        port = cfg.port,
         interval = cfg.interval,
         enabled = cfg.enabled,
         windows = cfg.windows,

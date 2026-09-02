@@ -7,15 +7,6 @@ data:extend({
     order = "a",
   },
   {
-    type = "int-setting",
-    name = "fb-udp-port",
-    setting_type = "runtime-global",
-    default_value = 41234,
-    minimum_value = 1,
-    maximum_value = 65535,
-    order = "b",
-  },
-  {
     -- How often a snapshot is emitted. 60 ticks = once per in-game second.
     type = "int-setting",
     name = "fb-interval-ticks",
@@ -41,7 +32,7 @@ data:extend({
     type = "string-setting",
     name = "fb-windows",
     setting_type = "runtime-global",
-    default_value = "5s,1m,10m,1h",
+    default_value = "5s,1m,10m,1h,10h,50h,250h,1000h",
     allow_blank = false,
     order = "e",
   },
@@ -65,5 +56,16 @@ data:extend({
     minimum_value = 1,
     maximum_value = 60,
     order = "g",
+  },
+  {
+    -- The long windows (1h and up) are refreshed every Nth snapshot rather than
+    -- every one: a 1000-hour average does not move perceptibly in a second.
+    type = "int-setting",
+    name = "fb-slow-every",
+    setting_type = "runtime-global",
+    default_value = 30,
+    minimum_value = 1,
+    maximum_value = 600,
+    order = "h",
   },
 })

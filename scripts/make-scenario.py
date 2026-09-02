@@ -5,7 +5,7 @@ A mod has to be installed by every client and matched by checksum, so clients
 are prompted to sync it. A scenario script travels inside the save itself, so
 joining clients need nothing at all.
 
-    python3 scripts/make-scenario.py <source.zip> <output.zip> [--port 41234]
+    python3 scripts/make-scenario.py <source.zip> <output.zip> [--windows 5s,1m,10m,1h]
 
 The source save's own control.lua is preserved and appended to, so whatever
 scenario it already runs (freeplay, usually) keeps working.
@@ -22,12 +22,13 @@ TEMPLATE = """
 require('broadcast').setup(function()
   return {{
     enabled = true,
-    port = {port},
+
     interval = {interval},
     rescan_seconds = {rescan},
     windows = '{windows}',
     history_items = {history_items},
     history_every = {history_every},
+    slow_every = {slow_every},
   }}
 end)
 """
@@ -37,10 +38,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("source")
     parser.add_argument("output")
-    parser.add_argument("--port", type=int, default=41234)
     parser.add_argument("--interval", type=int, default=60)
     parser.add_argument("--rescan", type=int, default=300)
-    parser.add_argument("--windows", default="5s,1m,10m,1h")
+    parser.add_argument("--windows", default="5s,1m,10m,1h,10h,50h,250h,1000h")
+    parser.add_argument("--slow-every", type=int, default=30)
     parser.add_argument("--history-items", type=int, default=5)
     parser.add_argument("--history-every", type=int, default=5)
     args = parser.parse_args()
@@ -68,12 +69,12 @@ def main() -> int:
 
         control += TEMPLATE.format(
             marker=MARKER,
-            port=args.port,
             interval=args.interval,
             rescan=args.rescan,
             windows=args.windows,
             history_items=args.history_items,
             history_every=args.history_every,
+            slow_every=args.slow_every,
         )
 
         if os.path.exists(args.output):
@@ -90,8 +91,8 @@ def main() -> int:
             out.writestr(root + "/broadcast.lua", logic.encode("utf-8"))
 
     print(
-        "built {} ({} bytes) - scenario root '{}', udp port {}".format(
-            args.output, os.path.getsize(args.output), root, args.port
+        "built {} ({} bytes) - scenario root '{}'".format(
+            args.output, os.path.getsize(args.output), root
         )
     )
     return 0

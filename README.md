@@ -15,16 +15,19 @@ UDP → sidecar → HTTP/SSE. The website is not built yet.
   WSL2 (Ubuntu 26.04)                                    Windows
   ┌──────────────────────────────────────┐
   │ factorio 2.0.77 headless (linux64)   │
-  │   mod: factorio-broadcast            │
+  │   softmod in the save's scenario     │
   │   samples stats every 60 ticks       │
   │            │                         │
-  │            │ helpers.send_udp        │
-  │            │ 127.0.0.1:41234         │
-  │            │ chunked, ≤1472 B/datagram
+  │            │ helpers.write_file      │
+  │            ▼                         │
+  │   script-output/broadcast.json       │
+  │   script-output/broadcast-history.json
+  │            │                         │
+  │            │ mtime poll, 200 ms      │
   │            ▼                         │
   │ sidecar (Node 22, TypeScript)        │
-  │   reassembles → normalises           │        browser / Cloudflare
-  │   :8099 /api/stats  /api/stream ─────┼──────► (localhost forwarding)
+  │   normalises → serves the dashboard  │        browser / Cloudflare
+  │   :8099 /  /api/stats  /api/stream ──┼──────► (localhost forwarding)
   └──────────────────────────────────────┘
               ▲
               │ RCON 127.0.0.1:27015  (control plane: restart, probe, assert)
@@ -33,11 +36,13 @@ UDP → sidecar → HTTP/SSE. The website is not built yet.
 Why this shape:
 
 - **A Factorio mod cannot open a listening socket.** The only outbound channels
-  are `helpers.write_file` and `helpers.send_udp`. `send_udp` wins on latency and
-  leaves no files behind, so the mod pushes and the sidecar serves.
-- **`send_udp` is localhost-only**, so the sidecar must share a network namespace
-  with the server. Both live in WSL2. Windows reaches the sidecar's TCP port
-  through WSL2's localhost forwarding.
+  are `helpers.write_file` and `helpers.send_udp`.
+- **It writes files rather than pushing datagrams.** `send_udp` looks like the
+  lower-latency choice and is not: it costs 8–31 ms *per call*, a fixed cost
+  independent of payload size, and its silent 1472-byte ceiling forces about 17
+  calls per snapshot. That blocked the game for ~140 ms every second — visible as
+  a hard stutter. `write_file` moves 20 KB in 0.6–1.0 ms with no size limit.
+  Switching cut a snapshot from 142 ms to 6 ms and took UPS from 43–53 back to 60.
 - **RCON is the control plane, not the data plane.** It is request/response and
   capped in command length; it is used to drive and inspect the server, not to
   ship statistics.
@@ -50,7 +55,9 @@ Things that cost time to find. All verified on 2.0.77.
 
 | Constraint | Detail |
 |---|---|
-| `send_udp` size ceiling | **1472 bytes**, silently dropped above that. Not the loopback MTU (65536) — an internal cap. No error is raised, the datagram just never leaves. Hence the chunking protocol. |
+| `send_udp` is very expensive | **8–31 ms per call**, fixed — a 10-byte datagram costs the same as a 1400-byte one. 17 calls per snapshot meant a 142 ms freeze every second. `write_file` does 20 KB in 0.6–1.0 ms. Do not use `send_udp` for anything periodic. |
+| `send_udp` size ceiling | **1472 bytes**, silently dropped above that. Not the loopback MTU (65536) — an internal cap, no error raised. Combined with the per-call cost, this is what made UDP unusable: bigger payloads force more of the expensive calls. |
+| `table_to_json` cost | ~8 ms per 1500-key table. Fine once a second, but it is the largest remaining cost in a snapshot. |
 | No Windows headless build | Wube ships headless for Linux only. The Windows binary *does* run `--start-server` headlessly, but the real dedicated build needs Linux — here, WSL2. |
 | Headless tarball includes DLC | The public `factorio-headless_linux_2.0.77.tar.xz` already contains `space-age`, `quality` and `elevated-rails` data. Nothing to copy from Steam. |
 | Electric stats are J/tick | `electric_network_statistics` flow counts are Joules **per tick**, the same unit as `get_max_energy_usage()` (1500 for a 90 kW drill). Watts = count × 60. Item stats, by contrast, are already per-minute. |
@@ -92,6 +99,26 @@ snapshot with four windows plus a history burst is ~19 KB across ~16 datagrams.
 back — so the sidecar derives it from how far the tick advances per second of
 wall clock. Cross-checked against a direct two-point `game.tick` measurement:
 46.25 measured vs 45.07 reported. (`scripts/ups-check.sh` runs that check.)
+
+## Debugging a stutter
+
+The game thread is single-threaded, so anything the mod does on a tick is time
+the server is not simulating. `LuaProfiler` measures real time and can be written
+to the log, which is the only timing signal Lua gets — it cannot be read back
+into a variable. That makes this the fastest way to find a stall, and it needs no
+restart:
+
+```bash
+bash scripts/dev.sh rcon '/silent-command local p=helpers.create_profiler() local r=remote.call("factorio-broadcast","send_now") p.stop() log{"","fb-lag FULL ",p} rcon.print("ok")'
+grep fb-lag ~/fb/instance/server.log | tail
+```
+
+Time the whole snapshot first, then bisect into phases with the same pattern.
+That is how the `send_udp` cost above was found: the total said 142 ms, the
+phases said 0.5 ms for logistics, 42 ms for JSON and 174–374 ms for the sends.
+
+`scripts/ups-check.sh` cross-checks the reported UPS against a direct two-point
+`game.tick` measurement, which tells you whether a fix actually landed.
 
 ## Shipping it: mod vs scenario
 

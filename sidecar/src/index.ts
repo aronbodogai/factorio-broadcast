@@ -1,21 +1,24 @@
-// Bridges the game to the web: listens for the mod's UDP datagrams, assembles
-// them into snapshots, and serves the latest one over HTTP + SSE.
+// Bridges the game to the web: reads the JSON the mod writes into script-output,
+// normalises it, and serves it over HTTP + SSE along with the dashboard.
 //
 // Node 24 runs TypeScript directly, so there is no build step and no dependencies:
 //   node src/index.ts
-import dgram from 'node:dgram';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const WEB_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../web');
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const WEB_ROOT = path.resolve(HERE, '../../web');
 
-const UDP_PORT = Number(process.env.FB_UDP_PORT ?? 41234);
-const UDP_HOST = process.env.FB_UDP_HOST ?? '127.0.0.1';
+// Where helpers.write_file puts things: <write-data-path>/script-output.
+const OUTPUT_DIR = process.env.FB_OUTPUT_DIR ?? path.join(process.env.HOME ?? '', 'fb/factorio/script-output');
+const SNAPSHOT_FILE = path.join(OUTPUT_DIR, 'broadcast.json');
+const HISTORY_FILE = path.join(OUTPUT_DIR, 'broadcast-history.json');
+const POLL_MS = Number(process.env.FB_POLL_MS ?? 200);
 const HTTP_PORT = Number(process.env.FB_HTTP_PORT ?? 8099);
 
-// The mod scales every rate and energy by 100 to keep JSON compact.
+// The mod scales every rate and energy by 100 to keep the JSON compact.
 const SCALE = 100;
 const un = (v: number | undefined): number => (v === undefined ? 0 : v / SCALE);
 const unMap = (m: Record<string, number> | undefined): Record<string, number> => {
@@ -27,7 +30,7 @@ const unMap = (m: Record<string, number> | undefined): Record<string, number> =>
 // Electric network statistics are stored in Joules per tick, averaged over the
 // requested window - the same unit as LuaEntityPrototype::get_max_energy_usage,
 // which reports 1500 for an electric mining drill (a 90 kW machine). So watts is
-// the flow count times the 60 ticks in a second, NOT divided by the window.
+// the flow count times the 60 ticks in a second.
 const TICKS_PER_SECOND = 60;
 const watts = (joulesPerTick: number | undefined): number => un(joulesPerTick) * TICKS_PER_SECOND;
 
@@ -39,8 +42,6 @@ const asArray = <T,>(v: unknown): T[] => {
   return [];
 };
 
-type Datagram = { k: 'meta' | 'surface'; v: number; t: number; [key: string]: unknown };
-
 type Snapshot = {
   tick: number;
   receivedAt: number;
@@ -51,13 +52,22 @@ type Snapshot = {
 };
 
 let latest: Snapshot | null = null;
-let partial: { tick: number; surfaces: Record<string, unknown> } | null = null;
 const clients = new Set<http.ServerResponse>();
-const stats = { packets: 0, snapshots: 0, bytes: 0, lastError: null as string | null };
+const stats = {
+  reads: 0,
+  snapshots: 0,
+  bytes: 0,
+  parseFailures: 0,
+  lastError: null as string | null,
+};
 
 // Graph series arrive on their own slower cadence, one window per burst, so they
 // are kept here and merged into every snapshot rather than expiring with one.
 const history: Record<string, Record<string, Record<string, number[]>>> = {};
+
+// Last value seen per surface per statistics window, so slow windows survive the
+// snapshots that omit them.
+const flowCache: Record<string, { items: Record<string, unknown>; fluids: Record<string, unknown> }> = {};
 
 // The game exposes no UPS reading - LuaProfiler measures real time but can only
 // be written to the log, never read back into Lua. Measuring it out here is both
@@ -74,7 +84,7 @@ function currentUps(): number | null {
   return (last.tick - first.tick) / seconds;
 }
 
-/** Protocol 2 reports each flow once per statistics window: {"1m": {input, output}}. */
+/** Protocol 3 reports each flow once per statistics window: {"1m": {input, output}}. */
 function normaliseFlowWindows(value: unknown) {
   const out: Record<string, { produced: Record<string, number>; consumed: Record<string, number> }> = {};
   for (const [window, flow] of Object.entries((value ?? {}) as Record<string, any>)) {
@@ -83,11 +93,11 @@ function normaliseFlowWindows(value: unknown) {
   return out;
 }
 
-function normaliseSurface(d: Datagram) {
+function normaliseSurface(d: any) {
   return {
     name: d.name,
     platform: d.platform,
-    pollution: un(d.pollution as number),
+    pollution: un(d.pollution),
     items: normaliseFlowWindows(d.items),
     fluids: normaliseFlowWindows(d.fluids),
     power: asArray<any>(d.power).map((n) => ({
@@ -106,36 +116,43 @@ function normaliseSurface(d: Datagram) {
   };
 }
 
-function finalise(meta: Datagram) {
-  const surfaces = partial && partial.tick === meta.t ? partial.surfaces : {};
-  partial = null;
-
+function applySnapshot(raw: any) {
   const now = Date.now();
   // A reloaded save can move the tick backwards; start the measurement over
   // rather than reporting a negative rate.
-  if (ticks.length && meta.t < ticks[ticks.length - 1].tick) ticks.length = 0;
-  ticks.push({ tick: meta.t, at: now });
+  if (ticks.length && raw.t < ticks[ticks.length - 1].tick) ticks.length = 0;
+  ticks.push({ tick: raw.t, at: now });
   while (ticks.length > UPS_WINDOW) ticks.shift();
 
+  // Long windows are sampled on a slower cadence, so a snapshot carries only
+  // the windows refreshed this tick. Merge rather than replace, keeping the
+  // last value seen for every window.
+  const surfaces: Record<string, unknown> = {};
+  for (const [name, surface] of Object.entries((raw.surfaces ?? {}) as Record<string, any>)) {
+    const fresh = normaliseSurface(surface);
+    const cache = flowCache[name] ?? (flowCache[name] = { items: {}, fluids: {} });
+    Object.assign(cache.items, fresh.items);
+    Object.assign(cache.fluids, fresh.fluids);
+    surfaces[name] = { ...fresh, items: cache.items, fluids: cache.fluids };
+  }
+
   latest = {
-    tick: meta.t,
+    tick: raw.t,
     receivedAt: now,
     ups: currentUps(),
     history,
     meta: {
-      modVersion: meta.mod_version,
-      speed: un(meta.speed as number),
-      paused: meta.paused,
-      research: meta.research
-        ? { ...(meta.research as object), progress: un((meta.research as any).progress) }
-        : null,
-      rockets: meta.rockets,
-      evolution: un(meta.evolution as number),
-      playersOnline: meta.players_online,
-      players: asArray(meta.players),
-      surfaceNames: asArray(meta.surfaces),
-      windows: asArray<string>(meta.windows),
-      baseWindow: meta.base_window ?? '1m',
+      modVersion: raw.mod_version,
+      speed: un(raw.speed),
+      paused: raw.paused,
+      research: raw.research ? { ...raw.research, progress: un(raw.research.progress) } : null,
+      rockets: raw.rockets,
+      evolution: un(raw.evolution),
+      playersOnline: raw.players_online,
+      players: asArray(raw.players),
+      surfaceNames: asArray<string>(raw.surface_names),
+      windows: asArray<string>(raw.windows),
+      baseWindow: raw.base_window ?? '1m',
     },
     surfaces,
   };
@@ -145,86 +162,58 @@ function finalise(meta: Datagram) {
   for (const res of clients) res.write(frame);
 }
 
-const sock = dgram.createSocket('udp4');
-
-// helpers.send_udp drops anything over 1472 bytes, so the mod splits payloads
-// into "<id>|<index>|<total>|<chunk>" datagrams that are reassembled here.
-const pending = new Map<number, { total: number; parts: string[]; have: number }>();
-const CHUNK_HEADER = /^(\d+)\|(\d+)\|(\d+)\|/;
-
-function reassemble(raw: string): string | null {
-  const m = CHUNK_HEADER.exec(raw);
-  if (!m) return raw; // unchunked, for forward compatibility
-  const id = Number(m[1]);
-  const index = Number(m[2]);
-  const total = Number(m[3]);
-  const body = raw.slice(m[0].length);
-
-  if (total === 1) return body;
-
-  let entry = pending.get(id);
-  if (!entry) {
-    entry = { total, parts: new Array(total), have: 0 };
-    pending.set(id, entry);
-    // A lost chunk would otherwise pin its siblings in memory forever.
-    if (pending.size > 64) {
-      for (const key of pending.keys()) {
-        if (key < id - 32) pending.delete(key);
-      }
+function applyHistory(raw: any) {
+  const window = String(raw.window);
+  for (const [surface, series] of Object.entries((raw.surfaces ?? {}) as Record<string, any>)) {
+    const normalised: Record<string, number[]> = {};
+    for (const [item, values] of Object.entries(series as Record<string, number[]>)) {
+      // Index 0 is the most recent sample; reverse so charts read left to right.
+      normalised[item] = asArray<number>(values).map(un).reverse();
     }
+    history[surface] = history[surface] ?? {};
+    history[surface][window] = normalised;
   }
-  if (entry.parts[index - 1] === undefined) {
-    entry.parts[index - 1] = body;
-    entry.have++;
-  }
-  if (entry.have < entry.total) return null;
-
-  pending.delete(id);
-  return entry.parts.join('');
 }
 
-sock.on('message', (buf) => {
-  stats.packets++;
-  stats.bytes += buf.length;
+// mtime, not fs.watch: the mod rewrites these files in place once a second, and
+// watch events on rewritten files are unreliable across platforms.
+const seen = new Map<string, number>();
 
-  const whole = reassemble(buf.toString('utf8'));
-  if (whole === null) return; // waiting on more chunks
-
-  let d: Datagram;
+function readIfChanged(file: string, apply: (raw: any) => void) {
+  let stat: fs.Stats;
   try {
-    d = JSON.parse(whole);
+    stat = fs.statSync(file);
+  } catch {
+    return; // not written yet
+  }
+  if (seen.get(file) === stat.mtimeMs) return;
+  seen.set(file, stat.mtimeMs);
+
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf8');
   } catch (err) {
-    stats.lastError = `bad JSON (${whole.length}B): ${(err as Error).message}`;
+    stats.lastError = `read ${path.basename(file)}: ${(err as Error).message}`;
     return;
   }
 
-  if (d.k === 'surface') {
-    // Surface datagrams always precede the meta datagram for the same tick.
-    if (!partial || partial.tick !== d.t) partial = { tick: d.t, surfaces: {} };
-    partial.surfaces[String(d.name)] = normaliseSurface(d);
-  } else if (d.k === 'history') {
-    const surface = String(d.name);
-    const window = String(d.window);
-    const series: Record<string, number[]> = {};
-    for (const [item, values] of Object.entries((d.series ?? {}) as Record<string, number[]>)) {
-      // Index 0 is the most recent sample; reverse so charts read left to right.
-      series[item] = asArray<number>(values).map(un).reverse();
-    }
-    history[surface] = history[surface] ?? {};
-    history[surface][window] = series;
-  } else if (d.k === 'meta') {
-    finalise(d);
+  stats.reads++;
+  stats.bytes += text.length;
+
+  try {
+    apply(JSON.parse(text));
+  } catch {
+    // A read can land mid-write. The next write is a second away, so just skip.
+    stats.parseFailures++;
   }
-});
+}
 
-sock.on('error', (err) => {
-  console.error(`[udp] ${err.message}`);
-  process.exit(1);
-});
+setInterval(() => {
+  readIfChanged(HISTORY_FILE, applyHistory);
+  readIfChanged(SNAPSHOT_FILE, applySnapshot);
+}, POLL_MS);
 
-sock.bind(UDP_PORT, UDP_HOST, () => {
-  console.log(`[udp] listening on ${UDP_HOST}:${UDP_PORT}`);
-});
+console.log(`[files] polling ${OUTPUT_DIR} every ${POLL_MS}ms`);
 
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -233,7 +222,7 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/api/stats') {
     if (!latest) {
       res.writeHead(503, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'no snapshot received yet' }));
+      res.end(JSON.stringify({ error: 'no snapshot yet', watching: SNAPSHOT_FILE }));
       return;
     }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -258,6 +247,7 @@ const server = http.createServer((req, res) => {
     res.end(
       JSON.stringify({
         ...stats,
+        watching: OUTPUT_DIR,
         clients: clients.size,
         lastTick: latest?.tick ?? null,
         ups: currentUps(),
@@ -292,5 +282,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(HTTP_PORT, () => {
-  console.log(`[http] http://127.0.0.1:${HTTP_PORT}/api/stats  (stream: /api/stream, health: /health)`);
+  console.log(`[http] http://127.0.0.1:${HTTP_PORT}/  (api: /api/stats, /api/stream, /health)`);
 });
