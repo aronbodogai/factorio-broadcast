@@ -208,6 +208,14 @@ wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/ideku/factorio-broadcast && bash scri
 The edit loop is **edit `mod/control.lua` → `dev.sh restart` → assert**, about
 15 seconds wall clock, of which ~5 s is loading the 24 MB save.
 
+`auto_pause` is on, so the server stops ticking when the last player leaves and
+burns no CPU while idle. That has a consequence at the other end of the chain:
+a paused game runs no ticks, the mod's timer never fires, and the sidecar sees
+no new snapshot — indistinguishable, from out there, from a server that died.
+The dashboard therefore reads `no data for Ns` rather than `paused`, and the UPS
+tile keeps showing the last value measured before the pause. Both are honest
+about the tick, which stays frozen on screen.
+
 Assertions an agent can make without a human:
 
 ```bash

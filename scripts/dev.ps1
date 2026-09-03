@@ -98,7 +98,7 @@ function Invoke-Setup {
   "autosave_interval": 0,
   "autosave_slots": 2,
   "afk_autokick_interval": 0,
-  "auto_pause": false,
+  "auto_pause": true,
   "only_admins_can_pause_the_game": true,
   "autosave_only_on_server": true,
   "non_blocking_saving": true
