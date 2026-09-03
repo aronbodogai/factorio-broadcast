@@ -209,6 +209,9 @@ h1 {
 .dot.live     { background: var(--primary); box-shadow: var(--glow); }
 .dot.stale    { background: var(--warning); }
 .dot.down     { background: var(--critical); }
+/* Paused is not a fault: an idle server is the expected state between sessions,
+   so it reads as quiet rather than as a warning. */
+.dot.paused   { background: var(--text-muted); }
 
 /* Sidecar picker. Hidden unless servers.json lists more than one target. */
 .target {
@@ -655,7 +658,10 @@ const TOTALS_WINDOW = 'all';
 let snapshot = null;
 let surface = null;
 let selectedWindow = null;
-let lastAt = 0;
+// Liveness is measured on the tick, not on frame arrival — see updateStatus.
+let lastTick = null;
+let lastProgressAt = 0;
+let streamOpen = false;
 let hoverIndex = null;
 
 // ---- formatting -----------------------------------------------------------
@@ -1100,17 +1106,23 @@ function parsePathTarget() {
   const match = location.pathname.match(/^\/target\/(.+)$/);
   if (!match) return null;
 
-  let spec = decodeURIComponent(match[1]).replace(/\/+$/, '');
-  if (!spec) return null;
-
-  // Browsers collapse a doubled slash inside a path, so a scheme written into
-  // /target/ arrives as "http:/host". Put the slash back before parsing, or the
-  // host would come out as "http".
-  spec = spec.replace(/^(https?):\/+/i, '$1://');
-  if (!/^https?:\/\//i.test(spec)) spec = 'https://' + spec;
-
+  // Both the decode and the parse are inside the try. A truncated link -
+  // /target/my-sidecar%2, easily produced by a chat client - makes
+  // decodeURIComponent throw, and that throw would otherwise escape through
+  // loadTargets into boot(), which awaits it with no catch: connect() would
+  // never run, and the page would sit on "connecting…" with no reconnect and no
+  // hint, because every path that could explain the state is downstream of it.
   let url;
   try {
+    let spec = decodeURIComponent(match[1]).replace(/\/+$/, '');
+    if (!spec) return null;
+
+    // Browsers collapse a doubled slash inside a path, so a scheme written into
+    // /target/ arrives as "http:/host". Put the slash back before parsing, or
+    // the host would come out as "http".
+    spec = spec.replace(/^(https?):\/+/i, '$1://');
+    if (!/^https?:\/\//i.test(spec)) spec = 'https://' + spec;
+
     url = new URL(spec);
   } catch {
     return null; // not a host at all; fall through to the normal resolution
@@ -1204,7 +1216,9 @@ function selectTarget(id) {
   snapshot = null;
   surface = null;
   selectedWindow = null;
-  lastAt = 0;
+  lastTick = null;
+  lastProgressAt = 0;
+  streamOpen = false;
   hoverIndex = null;
   colourSlots.clear();
   clearView();
@@ -1257,19 +1271,39 @@ function connect() {
     if (stream !== source) return; // superseded by a target switch
     try {
       snapshot = JSON.parse(event.data);
-      lastAt = Date.now();
+      // A frame arriving is not the same as the game running. The sidecar
+      // replays its last snapshot to every stream that connects, so a paused
+      // server hands out a fresh-looking frame each time the connection is
+      // remade — carrying the tick it was written at. Progress is the tick
+      // moving, and nothing else.
+      if (snapshot.tick !== lastTick) {
+        lastTick = snapshot.tick;
+        const now = Date.now();
+        if (lastProgressAt) noteGap(now - lastProgressAt);
+        // A page opened onto a server that paused an hour ago would otherwise
+        // count from its own load and claim the data was seconds old. The
+        // sidecar stamps receivedAt when it read the file, within a poll of
+        // when the mod wrote it, so the first frame is dated from that instead.
+        // Only the first: the two clocks are independent, and letting skew into
+        // every frame would make a running server look permanently behind.
+        lastProgressAt = lastProgressAt ? now : stampedAt(snapshot);
+      }
       render();
+      updateStatus();
     } catch (err) {
       setStatus('down', 'bad frame');
     }
   };
 
   source.onopen = () => {
-    if (stream === source) setStatus('live', 'live');
+    if (stream !== source) return;
+    streamOpen = true;
+    updateStatus();
   };
 
   source.onerror = () => {
     if (stream !== source) return;
+    streamOpen = false;
     setStatus('down', 'reconnecting…');
     // Never connected at all: the target is wrong, not merely down.
     if (!snapshot) showSetupHint();
@@ -1280,15 +1314,85 @@ function connect() {
   };
 }
 
-// The game can be paused or the server stopped while the stream stays open, so
-// age is tracked separately from connection state.
-setInterval(() => {
-  if (!lastAt) return;
-  const age = Date.now() - lastAt;
-  if (age > 5000) setStatus('stale', `no data for ${Math.round(age / 1000)}s`);
-  else if (age > 2500) setStatus('stale', 'lagging');
-  else setStatus('live', 'live');
-}, 1000);
+/**
+ * When the sidecar read this snapshot off disk, in local time — or now, if that
+ * stamp is unusable. Only a stamp in the future is rejected, which means the
+ * browser's clock is ahead of the server's. A large age is NOT rejected: a
+ * server paused since yesterday genuinely is a day old, and an upper bound here
+ * would hand exactly that case back to the bug this whole scheme exists to fix.
+ */
+function stampedAt(snap) {
+  const stamped = Number(snap && snap.receivedAt);
+  const now = Date.now();
+  if (!Number.isFinite(stamped)) return now;
+  return stamped <= now ? stamped : now;
+}
+
+/** 83_000 -> "83s"; 145_000 -> "2m 25s"; an overnight pause -> "9h 12m". */
+function duration(ms) {
+  const total = Math.round(ms / 1000);
+  if (total < 60) return total + 's';
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return minutes + 'm ' + (total % 60) + 's';
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours + 'h ' + (minutes % 60) + 'm';
+  return Math.floor(hours / 24) + 'd ' + (hours % 24) + 'h';
+}
+
+// One snapshot per second is a coincidence of the defaults, not a property of
+// the system. The mod emits one every fb-interval-ticks GAME ticks — an admin
+// setting, 6 to 3600, default 60 — so the wall-clock gap is interval/UPS
+// seconds, and UPS is itself scaled by game.speed. A megabase at 20 UPS on the
+// default interval sends a frame every three seconds; an interval of 300 sends
+// one every five. Fixed thresholds would paint every one of those as lagging,
+// while the UPS tile beside them says the server is fine. Nothing in the
+// payload carries the interval, so the page measures the cadence it is
+// actually being given.
+const GAP_SAMPLES = 8;
+const ASSUMED_GAP_MS = 5000; // before enough samples, err towards "running"
+const gaps = [];
+
+function noteGap(ms) {
+  if (!(ms > 0)) return;
+  gaps.push(ms);
+  if (gaps.length > GAP_SAMPLES) gaps.shift();
+}
+
+/** The median, so one long gap out of a pause cannot stretch the whole scale. */
+function expectedGap() {
+  if (gaps.length < 3) return ASSUMED_GAP_MS;
+  const sorted = gaps.slice().sort((a, b) => a - b);
+  const mid = sorted[Math.floor(sorted.length / 2)];
+  return Math.min(120000, Math.max(1000, mid));
+}
+
+// Three different silences, and they are not the same news:
+//
+//   the stream is down          the sidecar or the tunnel is unreachable
+//   stream up, tick frozen      the sidecar answers but the game is not ticking
+//   stream up, tick moving      running
+//
+// The middle case is what auto_pause produces once the last player leaves. It
+// cannot be told apart from a mod that stopped reporting while the game ran, so
+// the wording only claims what is actually observed until the silence is long
+// enough that a network hiccup is no longer a plausible reading.
+//
+// Every threshold is a multiple of the measured cadence, never a fixed number of
+// seconds. At the default one-second cadence they work out at 2.5 s, 5 s and
+// 10 s; on a server sending every five seconds they scale with it.
+function updateStatus() {
+  if (!streamOpen) return;    // onerror owns the message while reconnecting
+  if (!lastProgressAt) return; // nothing has arrived yet; still "connecting…"
+
+  const idle = Date.now() - lastProgressAt;
+  const gap = expectedGap();
+  if (idle < gap * 2.5) setStatus('live', 'live');
+  else if (idle < gap * 5) setStatus('stale', 'lagging');
+  else if (idle < gap * 10) setStatus('stale', `no data for ${duration(idle)}`);
+  else setStatus('paused', `paused · ${duration(idle)}`);
+}
+
+setInterval(updateStatus, 1000);
 
 (async function boot() {
   targets = await loadTargets();

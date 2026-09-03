@@ -210,11 +210,11 @@ The edit loop is **edit `mod/control.lua` → `dev.sh restart` → assert**, abo
 
 `auto_pause` is on, so the server stops ticking when the last player leaves and
 burns no CPU while idle. That has a consequence at the other end of the chain:
-a paused game runs no ticks, the mod's timer never fires, and the sidecar sees
-no new snapshot — indistinguishable, from out there, from a server that died.
-The dashboard therefore reads `no data for Ns` rather than `paused`, and the UPS
-tile keeps showing the last value measured before the pause. Both are honest
-about the tick, which stays frozen on screen.
+a paused game runs no ticks, the mod's timer never fires, and no snapshot is
+written. The dashboard reads that as `paused · 20m 44s` — see *Reading the
+status badge*. The UPS tile keeps showing the last value measured before the
+pause, as does every other figure; the frozen tick in the header is what says
+they are held, not current.
 
 Assertions an agent can make without a human:
 
@@ -333,6 +333,39 @@ default NAT networking it would need the WSL address instead.
 
 Note what does *not* pass through Cloudflare: the tunnel carries the statistics
 straight from the sidecar to the browser. The deployed site is the page only.
+
+### Reading the status badge
+
+The badge reports whether the **tick is moving**, not whether bytes are
+arriving. The distinction matters because the sidecar replays its last snapshot
+to every stream that connects, so a paused server hands out a fresh-looking
+frame on each reconnect — carrying the tick it was written at. Counting arrivals
+made that read `live` for a server that had been idle for hours.
+
+| Badge | Means |
+|---|---|
+| `live` | The tick is advancing. |
+| `lagging` | No progress for 2.5× the usual gap between snapshots. |
+| `no data for 12s` | No progress for 5×. Could be the game, could be the pipe. |
+| `paused · 20m 44s` | No progress for 10×, with the stream still open. |
+| `reconnecting…` | The stream itself is down: sidecar or tunnel unreachable. |
+
+Every threshold is a multiple of the *measured* cadence, never a fixed number of
+seconds. One snapshot per second is a coincidence of the defaults: the mod emits
+one every `fb-interval-ticks` game ticks (6–3600, default 60), so the real gap is
+`interval / UPS` seconds and stretches as UPS falls. A megabase at 20 UPS sends a
+frame every three seconds. Fixed thresholds would have called all of that
+`lagging` while the UPS tile beside it said the server was healthy, so the page
+tracks the median of the last eight gaps and scales to whatever it is getting.
+
+Two things it deliberately does not claim. A paused game and a mod that stopped
+reporting look identical from outside, so `paused` is only asserted once the
+silence is too long to be a hiccup. And on first load the page has no history to
+measure, so it dates that first frame from the sidecar's own `receivedAt` stamp —
+otherwise opening the dashboard onto a server paused an hour ago would count from
+zero and imply the data had just arrived. Only the first frame: the two clocks
+are independent, and letting skew into every frame would make a running server
+look permanently behind.
 
 ### Deploying the page
 
