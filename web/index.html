@@ -1,342 +1,574 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Factorio Broadcast</title>
+
+<!-- Bricolage Grotesque carries the display hierarchy; everything else is the
+     system stack, so the page renders correctly before the font arrives. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300;12..96,600&display=swap">
+
 <style>
-  :root {
-    color-scheme: light;
-    --page:           #f9f9f7;
-    --surface:        #fcfcfb;
-    --text-primary:   #0b0b0b;
-    --text-secondary: #52514e;
-    --text-muted:     #898781;
-    --grid:           #e1e0d9;
-    --baseline:       #c3c2b7;
-    --border:         rgba(11, 11, 11, 0.10);
-    --series-1:       #2a78d6;
-    --series-2:       #eb6834;
-    --series-3:       #1baf7a;
-    --series-4:       #eda100;
-    --series-5:       #e87ba4;
-    --track:          #eeede8;
-    --good:           #0ca30c;
-    --warning:        #fab219;
-    --critical:       #d03b3b;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      color-scheme: dark;
-      --page:           #0d0d0d;
-      --surface:        #1a1a19;
-      --text-primary:   #ffffff;
-      --text-secondary: #c3c2b7;
-      --text-muted:     #898781;
-      --grid:           #2c2c2a;
-      --baseline:       #383835;
-      --border:         rgba(255, 255, 255, 0.10);
-      --series-1:       #3987e5;
-      --series-2:       #d95926;
-      --series-3:       #199e70;
-      --series-4:       #c98500;
-      --series-5:       #d55181;
-      --track:          #262624;
-    }
-  }
-  :root[data-theme="dark"] {
-    color-scheme: dark;
-    --page:           #0d0d0d;
-    --surface:        #1a1a19;
-    --text-primary:   #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted:     #898781;
-    --grid:           #2c2c2a;
-    --baseline:       #383835;
-    --border:         rgba(255, 255, 255, 0.10);
-    --series-1:       #3987e5;
-    --series-2:       #d95926;
-    --series-3:       #199e70;
-    --series-4:       #c98500;
-    --series-5:       #d55181;
-    --track:          #262624;
-  }
+/* ===========================================================================
+   Nexus Core tokens (DESIGN.md).
 
-  * { box-sizing: border-box; }
+   Dark only. The token table lists both "#0A0A0A as the neutral foundation for
+   backgrounds" and "Background: #00E5FF"; the second reading would put a
+   saturated cyan behind nine thousand digits of production data, so the page
+   takes the first and spends cyan on accent, text-secondary and glow instead.
+   =========================================================================== */
+:root {
+  color-scheme: dark;
 
-  body {
-    margin: 0;
-    background: var(--page);
-    color: var(--text-primary);
-    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
+  --primary:        #00E5FF;
+  --tertiary:       #0A3BFF;
+  --neutral:        #0A0A0A;
+  --page:           #0A0A0A;
+  --text-primary:   #FFFFFF;
+  --text-secondary: #00E5FF;
+  --text-muted:     rgba(255, 255, 255, 0.55);
+  --border:         rgba(255, 255, 255, 0.2);
+  --border-strong:  #FFFFFF;
 
-  .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 20px 64px; }
+  /* Glass: a white wash falling to nothing, the documented
+     bg-gradient-to-b from-white/20 to-transparent, thinned for large areas. */
+  --glass:          linear-gradient(to bottom, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.01));
+  --glass-strong:   linear-gradient(to bottom, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.02));
+  --track:          rgba(255, 255, 255, 0.08);
+  --blur:           4px;
 
-  header {
-    display: flex;
-    align-items: baseline;
-    gap: 16px;
-    flex-wrap: wrap;
-    margin-bottom: 20px;
-  }
-  h1 { font-size: 19px; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+  --shadow-card:    rgba(0, 0, 0, 0.25) 0 25px 50px -12px;
+  --glow:           rgb(0, 229, 255) 0 0 8px 0;
 
-  .status {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    margin-left: auto;
-  }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
-  .dot.live { background: var(--good); }
-  .dot.stale { background: var(--warning); }
-  .dot.down { background: var(--critical); }
+  /* 4px base rhythm; every gap below steps through this scale. */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px;
+  --s-5: 20px; --s-6: 24px; --s-8: 32px; --s-14: 56px;
 
-  /* Sidecar picker. Hidden unless servers.json lists more than one target. */
-  .target {
-    appearance: none;
-    background: var(--surface);
-    color: var(--text-secondary);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    padding: 3px 8px;
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .target:hover { color: var(--text-primary); }
-  /* A UA display rule on <select> outranks the plain hidden attribute. */
-  .target[hidden] { display: none; }
+  --r-sm: 2px; --r-md: 4px; --r-lg: 20px; --r-pill: 9999px;
 
-  .meta { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --display: "Bricolage Grotesque", system-ui, -apple-system, "Segoe UI", sans-serif;
 
-  /* KPI row */
-  .tiles {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
-    gap: 10px;
-    margin-bottom: 22px;
-  }
-  .tile {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 13px 15px;
-  }
-  .tile .label {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.055em;
-    color: var(--text-muted);
-    margin-bottom: 5px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .tile .value { font-size: 25px; font-weight: 600; line-height: 1.15; letter-spacing: -0.02em; }
-  .tile .sub { font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
-  .tile.wide { grid-column: 1 / -1; }
-  .tile code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
-    background: var(--track); border-radius: 4px; padding: 1px 5px; word-break: break-all; }
+  --dur: 150ms;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
 
-  /* Surface tabs */
-  .tabs {
-    display: flex;
-    gap: 4px;
-    flex-wrap: wrap;
-    border-bottom: 1px solid var(--grid);
-    margin-bottom: 18px;
-  }
-  .tab {
-    appearance: none;
-    background: none;
-    border: 0;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    padding: 8px 12px;
-    font: inherit;
-    font-size: 13px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    border-radius: 6px 6px 0 0;
-  }
-  .tab:hover { background: var(--track); color: var(--text-primary); }
-  .tab[aria-selected="true"] {
-    color: var(--text-primary);
-    border-bottom-color: var(--series-1);
-    font-weight: 600;
-  }
-  .tab .count { color: var(--text-muted); font-weight: 400; font-size: 11px; margin-left: 5px; }
+  /* Five overlapping lines need five separable colours, and the palette offers
+     two hues. Rather than invent a third, the ramp is shades and tints of the
+     cyan and the blue plus white, separated by lightness — which survives the
+     overlap better than neighbouring hues do, and reads for the colour-blind.
+     The legend names every series regardless: identity is never colour alone. */
+  --series-1: #00E5FF;
+  --series-2: #FFFFFF;
+  --series-3: #0A3BFF;
+  --series-4: #00808F;
+  --series-5: #8C9BFF;
 
-  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; }
+  /* Power satisfaction is a semantic state, the one case the palette rules
+     admit. Kept desaturated so it never competes with the cyan accent. */
+  --good:     #3DDC97;
+  --warning:  #FFB020;
+  --critical: #FF5C5C;
+}
 
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 15px 17px 17px;
-  }
-  .card h2 {
-    font-size: 13px;
-    font-weight: 600;
-    margin: 0 0 2px;
-    letter-spacing: -0.005em;
-  }
-  .card .hint { font-size: 11px; color: var(--text-muted); margin-bottom: 13px; }
+* { box-sizing: border-box; }
 
-  /* Ranked bars */
-  .bars { display: flex; flex-direction: column; gap: 2px; }
-  .bar-row {
-    display: grid;
-    grid-template-columns: minmax(96px, 34%) 1fr auto;
-    align-items: center;
-    gap: 10px;
-    padding: 2px 4px;
-    border-radius: 5px;
-    cursor: default;
-  }
-  .bar-row:hover { background: var(--track); }
-  .bar-name {
-    font-size: 12px;
-    color: var(--text-secondary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  /* Both must be block: an inline span ignores width and height entirely. */
-  .bar-track { display: block; height: 11px; background: var(--track); border-radius: 4px; overflow: hidden; }
-  .bar-fill { display: block; height: 100%; border-radius: 4px; background: var(--series-1); }
-  .bar-fill.alt { background: var(--series-2); }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text-primary);
+  font: 400 14px/22.75px system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
 
-  .bar-group {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.055em;
-    color: var(--text-muted);
-    margin: 9px 0 3px;
-  }
-  .bar-group:first-child { margin-top: 0; }
-  .bar-value {
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-primary);
-    min-width: 72px;
-    text-align: right;
-  }
+/* The grid is the frame: a bounded column, everything inside it on the same
+   4px cadence. */
+.wrap {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: var(--s-8) var(--s-8) var(--s-14);
+}
 
-  /* Power */
-  .net { padding-top: 13px; margin-top: 13px; border-top: 1px solid var(--grid); }
-  .net:first-of-type { padding-top: 0; margin-top: 0; border-top: 0; }
-  .net-head {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-bottom: 9px;
-  }
-  .net-title { font-size: 12px; font-weight: 600; }
-  .net-nums { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; margin-left: auto; }
-  .sat {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 1px 7px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-  }
-  .sat.good     { color: var(--good); }
-  .sat.warning  { color: var(--warning); }
-  .sat.critical { color: var(--critical); }
+@media (max-width: 720px) {
+  .wrap { padding: var(--s-4) var(--s-4) var(--s-8); }
+}
 
-  .empty { font-size: 12px; color: var(--text-muted); padding: 6px 0; }
+/* ---- shared surfaces ---------------------------------------------------- */
 
-  /* Window filter: one row above the charts. */
-  .filters {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-bottom: 14px;
-  }
-  .filters .label {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.055em;
-    color: var(--text-muted);
-  }
-  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .seg button {
-    appearance: none;
-    background: var(--surface);
-    border: 0;
-    border-left: 1px solid var(--border);
-    padding: 5px 11px;
-    font: inherit;
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-secondary);
-    cursor: pointer;
-  }
-  .seg button:first-child { border-left: 0; }
-  .seg button:hover { color: var(--text-primary); }
-  .seg button[aria-pressed="true"] { background: var(--series-1); color: #fff; font-weight: 600; }
+.card {
+  position: relative;
+  background: var(--glass);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  padding: var(--s-8);
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+  box-shadow: var(--shadow-card);
+}
 
-  /* Chart */
-  .chart-wrap { position: relative; }
-  .chart { display: block; width: 100%; height: auto; }
-  /* The class rule above outranks the UA [hidden] rule, so restate it. */
-  /* hidden is an HTMLElement property and is not reflected on SVG elements,
-     so emptiness is carried by a class instead. */
-  .chart.is-empty { display: none; }
-  .chart .grid { stroke: var(--grid); stroke-width: 1; }
-  .chart .axis { stroke: var(--baseline); stroke-width: 1; }
-  .chart .tick-label { fill: var(--text-muted); font-size: 9px; font-variant-numeric: tabular-nums; }
-  .chart .line { fill: none; stroke-width: 2; }
-  .chart .crosshair { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
+@media (max-width: 720px) {
+  .card { padding: var(--s-5); }
+}
 
-  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 11px; }
-  .legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
-  .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+h2 {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 0 0 var(--s-1);
+}
 
-  .tip {
-    position: absolute;
-    pointer-events: none;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    padding: 7px 9px;
-    font-size: 11px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
-    white-space: nowrap;
-    z-index: 2;
-  }
-  .tip .when { color: var(--text-muted); margin-bottom: 4px; }
-  .tip .row { display: flex; align-items: center; gap: 6px; }
-  .tip .row .v { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+.hint {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+  margin-bottom: var(--s-5);
+}
 
-  table { border-collapse: collapse; width: 100%; font-size: 12px; }
-  th, td { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--grid); }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  details { margin-top: 12px; }
-  summary { font-size: 12px; color: var(--text-secondary); cursor: pointer; }
-  .scroll { overflow-x: auto; }
+.meta {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
 
-  footer { margin-top: 26px; font-size: 11px; color: var(--text-muted); }
+.empty { font-size: 12px; color: var(--text-muted); padding: var(--s-2) 0; }
+
+/* ---- hero --------------------------------------------------------------- */
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--s-8);
+  align-items: stretch;
+  margin-bottom: var(--s-8);
+}
+
+@media (max-width: 900px) {
+  .hero { grid-template-columns: minmax(0, 1fr); }
+  .hero-visual { display: none; }
+}
+
+.hero-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+h1 {
+  font-family: var(--display);
+  font-size: 52px;
+  font-weight: 300;
+  line-height: 52px;
+  letter-spacing: -0.05em;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  h1 { font-size: 36px; line-height: 36px; }
+}
+
+.hero-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  padding: var(--s-1) var(--s-3);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--text-muted);
+}
+.dot.live     { background: var(--primary); box-shadow: var(--glow); }
+.dot.stale    { background: var(--warning); }
+.dot.down     { background: var(--critical); }
+
+/* Sidecar picker. Hidden unless servers.json lists more than one target. */
+.target {
+  appearance: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--s-1) var(--s-2);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.target:hover { color: var(--text-primary); border-color: var(--border-strong); }
+.target option { background: var(--neutral); color: var(--text-primary); }
+/* A UA display rule on <select> outranks the plain hidden attribute. */
+.target[hidden] { display: none; }
+
+/* The dot-matrix accent. The CSS grid underneath is the fallback: it is what
+   shows when WebGL is unavailable, the library fails to load, or the reader
+   asked for reduced motion. */
+.hero-visual {
+  position: relative;
+  min-height: 168px;
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(circle at center, rgba(0, 229, 255, 0.6) 0.5px, transparent 0.5px) 0 0 / 12px 12px,
+    var(--glass);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+.hero-visual canvas { position: absolute; top: 0; left: 0; display: block; }
+.hero-visual::after {
+  /* Soft depth fade, kept in CSS so it applies to both renderings. */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, rgba(10, 10, 10, 0) 40%, rgba(10, 10, 10, 0.85));
+  pointer-events: none;
+}
+
+/* ---- KPI grid ----------------------------------------------------------- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--s-2);
+  margin-bottom: var(--s-8);
+}
+
+.tile {
+  background: var(--glass);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  padding: var(--s-6);
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+  transition: border-color var(--dur) var(--ease);
+}
+.tile:hover { border-color: var(--border-strong); }
+.tile.wide { grid-column: 1 / -1; }
+
+.tile .label {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: var(--s-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tile .value {
+  font-family: var(--display);
+  font-size: 36px;
+  font-weight: 300;
+  line-height: 40px;
+  letter-spacing: -0.05em;
+  font-variant-numeric: tabular-nums;
+  /* "137.8 MW" has to stay on one line; wrapped, the unit reads as a second
+     number stacked under the first. */
+  white-space: nowrap;
+}
+.tile .sub { font-size: 12px; line-height: 16px; color: var(--text-muted); margin-top: var(--s-2); }
+.tile code {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--track);
+  border-radius: var(--r-sm);
+  padding: 1px 5px;
+  word-break: break-all;
+  color: var(--text-secondary);
+}
+
+/* ---- surface tabs ------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: var(--s-1);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--s-5);
+}
+
+.tab {
+  appearance: none;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  padding: var(--s-3) var(--s-4);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.tab:hover { color: var(--text-primary); }
+.tab[aria-selected="true"] {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+.tab .count { color: var(--text-muted); font-weight: 400; margin-left: var(--s-1); }
+
+/* ---- window filter ------------------------------------------------------ */
+
+.filters {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--s-5);
+}
+
+.filters .label {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.seg { display: inline-flex; gap: var(--s-1); flex-wrap: wrap; }
+
+.seg button {
+  appearance: none;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--s-2);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 1.2px;
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease),
+              border-color var(--dur) var(--ease);
+}
+.seg button:hover { border-color: var(--border-strong); }
+.seg button[aria-pressed="true"] {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #000000;
+}
+
+/* ---- chart -------------------------------------------------------------- */
+
+.chart-wrap { position: relative; }
+
+.chart { width: 100%; height: auto; display: block; }
+.chart.is-empty { display: none; }
+
+.chart .grid       { stroke: rgba(255, 255, 255, 0.1); stroke-width: 1; }
+.chart .axis       { stroke: var(--border); stroke-width: 1; }
+.chart .line       { fill: none; stroke-width: 2; }
+.chart .crosshair  { stroke: var(--primary); stroke-width: 1; stroke-dasharray: 2 3; }
+.chart .tick-label {
+  fill: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.legend-item { display: inline-flex; align-items: center; gap: var(--s-2); }
+.swatch { width: 8px; height: 8px; border-radius: var(--r-sm); flex: none; }
+
+.tip {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(10, 10, 10, 0.9);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--s-2) var(--s-3);
+  font-family: var(--mono);
+  font-size: 11px;
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+  box-shadow: var(--shadow-card);
+  white-space: nowrap;
+  z-index: 2;
+}
+.tip .when { color: var(--text-secondary); margin-bottom: var(--s-1); }
+.tip .row { display: flex; align-items: center; gap: var(--s-2); }
+.tip .row .v { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* ---- bars --------------------------------------------------------------- */
+
+.bars { display: flex; flex-direction: column; gap: var(--s-2); }
+
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 128px) 1fr auto;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: 12px;
+  line-height: 16px;
+}
+.bar-name {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bar-track { background: var(--track); height: 6px; border-radius: var(--r-sm); overflow: hidden; }
+.bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  border-radius: var(--r-sm);
+  transition: width var(--dur) var(--ease);
+}
+.bar-fill.alt { background: var(--tertiary); }
+.bar-value {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.bar-group {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: var(--s-4) 0 var(--s-2);
+}
+
+/* ---- electric networks -------------------------------------------------- */
+
+.net + .net { margin-top: var(--s-6); border-top: 1px solid var(--border); padding-top: var(--s-6); }
+
+.net-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--s-2);
+}
+.net-title {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+.net-nums { font-family: var(--mono); font-size: 12px; color: var(--text-muted); margin-left: auto; }
+
+.sat {
+  font-family: var(--mono);
+  font-size: 11px;
+  border-radius: var(--r-pill);
+  border: 1px solid currentColor;
+  padding: 0 var(--s-2);
+}
+.sat.good     { color: var(--good); }
+.sat.warning  { color: var(--warning); }
+.sat.critical { color: var(--critical); }
+
+/* ---- tables ------------------------------------------------------------- */
+
+table { border-collapse: collapse; width: 100%; font-size: 12px; }
+th, td { text-align: left; padding: var(--s-1) var(--s-2) var(--s-1) 0; border-bottom: 1px solid var(--track); }
+th {
+  font-family: var(--mono);
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); }
+
+details { margin-top: var(--s-5); }
+summary {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.scroll { overflow-x: auto; }
+
+/* ---- layout ------------------------------------------------------------- */
+
+.stack { display: grid; gap: var(--s-2); }
+
+.grid2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--s-2);
+}
+
+footer {
+  margin-top: var(--s-8);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header>
-    <h1>Factorio Broadcast</h1>
-    <span class="meta" id="clock">—</span>
-    <select class="target" id="server" aria-label="Server" hidden></select>
-    <span class="meta" id="target-note"></span>
-    <span class="status"><span class="dot" id="dot"></span><span id="conn">connecting…</span></span>
+
+  <header class="hero">
+    <div class="hero-text">
+      <h1>Factorio Broadcast</h1>
+      <div class="hero-meta">
+        <span class="meta" id="clock">—</span>
+        <select class="target" id="server" aria-label="Server" hidden></select>
+        <span class="meta" id="target-note"></span>
+        <span class="status"><span class="dot" id="dot"></span><span id="conn">connecting…</span></span>
+      </div>
+    </div>
+    <div class="hero-visual" id="webgl-container" aria-hidden="true"></div>
   </header>
 
   <div class="tiles" id="tiles"></div>
@@ -349,52 +581,54 @@
     <span class="meta" id="window-note"></span>
   </div>
 
-  <section class="card" style="margin-bottom:14px">
-    <h2>Production over time</h2>
-    <div class="hint" id="chart-hint">the game's own graph samples</div>
-    <div class="chart-wrap" id="chart-wrap">
-      <svg class="chart" id="chart" viewBox="0 0 600 210" role="img" aria-label="Production over time"></svg>
-      <div class="tip" id="tip" hidden></div>
+  <div class="stack">
+    <section class="card">
+      <h2>Production over time</h2>
+      <div class="hint" id="chart-hint">the game's own graph samples</div>
+      <div class="chart-wrap" id="chart-wrap">
+        <svg class="chart" id="chart" viewBox="0 0 600 210" role="img" aria-label="Production over time"></svg>
+        <div class="tip" id="tip" hidden></div>
+      </div>
+      <div class="legend" id="chart-legend"></div>
+      <details>
+        <summary>Table view</summary>
+        <div class="scroll"><table id="chart-table"></table></div>
+      </details>
+    </section>
+
+    <div class="grid2">
+      <section class="card">
+        <h2>Electricity</h2>
+        <div class="hint" id="power-hint">per electric network</div>
+        <div id="power"></div>
+      </section>
+
+      <section class="card">
+        <h2>Items produced</h2>
+        <div class="hint window-hint">per minute</div>
+        <div class="bars" id="produced"></div>
+        <details>
+          <summary>Table view</summary>
+          <div class="scroll"><table id="produced-table"></table></div>
+        </details>
+      </section>
+
+      <section class="card">
+        <h2>Items consumed</h2>
+        <div class="hint window-hint">per minute</div>
+        <div class="bars" id="consumed"></div>
+        <details>
+          <summary>Table view</summary>
+          <div class="scroll"><table id="consumed-table"></table></div>
+        </details>
+      </section>
+
+      <section class="card">
+        <h2>Fluids produced</h2>
+        <div class="hint window-hint">per minute</div>
+        <div class="bars" id="fluids"></div>
+      </section>
     </div>
-    <div class="legend" id="chart-legend"></div>
-    <details>
-      <summary>Table view</summary>
-      <div class="scroll"><table id="chart-table"></table></div>
-    </details>
-  </section>
-
-  <div class="grid2">
-    <section class="card">
-      <h2>Electricity</h2>
-      <div class="hint" id="power-hint">per electric network</div>
-      <div id="power"></div>
-    </section>
-
-    <section class="card">
-      <h2>Items produced</h2>
-      <div class="hint window-hint">per minute</div>
-      <div class="bars" id="produced"></div>
-      <details>
-        <summary>Table view</summary>
-        <div class="scroll"><table id="produced-table"></table></div>
-      </details>
-    </section>
-
-    <section class="card">
-      <h2>Items consumed</h2>
-      <div class="hint window-hint">per minute</div>
-      <div class="bars" id="consumed"></div>
-      <details>
-        <summary>Table view</summary>
-        <div class="scroll"><table id="consumed-table"></table></div>
-      </details>
-    </section>
-
-    <section class="card">
-      <h2>Fluids produced</h2>
-      <div class="hint window-hint">per minute</div>
-      <div class="bars" id="fluids"></div>
-    </section>
   </div>
 
   <footer id="foot">—</footer>
@@ -664,7 +898,7 @@ function renderChart(series, window, emptyMessage) {
     <text class="tick-label" x="${W - R}" y="${H - 6}" text-anchor="end">now</text>`;
 
   // Identity is never colour-alone: every series is named here, which also
-  // provides the relief the light-mode palette requires.
+  // provides the relief the palette's near-neighbour hues require.
   legend.innerHTML = names.map((name, i) =>
     `<span class="legend-item"><span class="swatch" style="background:var(--series-${slots[i] + 1})"></span>${pretty(name)}</span>`
   ).join('');
@@ -1061,6 +1295,130 @@ setInterval(() => {
   target = pickTarget();
   renderTargets();
   connect();
+})();
+
+// ---- dot-matrix accent ----------------------------------------------------
+
+// An inset field of dots on an orthographic camera, breathing on a 2 s cycle
+// and drifting a little towards the pointer. Everything here is ornament: the
+// container already paints a CSS dot grid, so if Three.js never arrives, or the
+// reader asked for reduced motion, that grid is what stays on screen.
+(function dotMatrix() {
+  const container = document.getElementById('webgl-container');
+  if (!container) return;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+  const script = document.createElement('script');
+  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+  script.async = true;
+  script.onerror = () => { /* CSS dot grid remains */ };
+  script.onload = () => { try { start(window.THREE); } catch { /* ornament only */ } };
+  document.head.appendChild(script);
+
+  function start(THREE) {
+    if (!THREE) return;
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    if (!width || !height) return;
+
+    const scene = new THREE.Scene();
+    const aspect = width / height;
+    const d = 14;
+    const camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 1, 1000);
+    camera.position.set(20, 20, 20);
+    camera.lookAt(scene.position);
+
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.appendChild(renderer.domElement);
+
+    // A flat lattice in the xz plane. Sparse, per the design note - the gaps
+    // are what make it read as a matrix rather than a texture.
+    const SIDE = 40, STEP = 0.9;
+    const positions = new Float32Array(SIDE * SIDE * 3);
+    let i = 0;
+    for (let a = 0; a < SIDE; a++) {
+      for (let b = 0; b < SIDE; b++) {
+        positions[i++] = (a - SIDE / 2) * STEP;
+        positions[i++] = 0;
+        positions[i++] = (b - SIDE / 2) * STEP;
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+    // Written as a shader rather than PointsMaterial so each dot can fade with
+    // depth on its own - the "soft depth fade" the effect is built from.
+    const material = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      uniforms: {
+        uTime: { value: 0 },
+        uColor: { value: new THREE.Color(0x00E5FF) },
+      },
+      vertexShader: `
+        uniform float uTime;
+        varying float vFade;
+        void main() {
+          vec3 p = position;
+          // Breathing pulse: one slow wave crossing the lattice.
+          float wave = sin(length(p.xz) * 0.35 - uTime * 3.1415);
+          p.y = wave * 1.1;
+          vec4 mv = modelViewMatrix * vec4(p, 1.0);
+          gl_Position = projectionMatrix * mv;
+          gl_PointSize = 2.2;
+          // Nearer dots are brighter; the wave crest brightens too.
+          vFade = clamp(0.18 + wave * 0.28 + (mv.z + 24.0) / 48.0 * 0.55, 0.0, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 uColor;
+        varying float vFade;
+        void main() {
+          // Round dots, not squares.
+          vec2 c = gl_PointCoord - vec2(0.5);
+          if (dot(c, c) > 0.25) discard;
+          gl_FragColor = vec4(uColor, vFade);
+        }
+      `,
+    });
+
+    scene.add(new THREE.Points(geometry, material));
+
+    // Pointer parallax, deliberately understated: a drift, not a camera rig.
+    let px = 0, py = 0, tx = 0, ty = 0;
+    container.addEventListener('pointermove', (event) => {
+      const box = container.getBoundingClientRect();
+      tx = ((event.clientX - box.left) / box.width - 0.5) * 2.5;
+      ty = ((event.clientY - box.top) / box.height - 0.5) * 2.5;
+    });
+    container.addEventListener('pointerleave', () => { tx = 0; ty = 0; });
+
+    const t0 = performance.now();
+    (function frame(now) {
+      requestAnimationFrame(frame);
+      // A hidden tab still fires rAF in some browsers; skip the work anyway.
+      if (document.hidden) return;
+      px += (tx - px) * 0.05;
+      py += (ty - py) * 0.05;
+      // 2000 ms, the documented long beat.
+      material.uniforms.uTime.value = ((now - t0) % 2000) / 2000;
+      camera.position.set(20 + px, 20 - py, 20 - px);
+      camera.lookAt(scene.position);
+      renderer.render(scene, camera);
+    })(t0);
+
+    window.addEventListener('resize', () => {
+      const w = container.clientWidth, h = container.clientHeight;
+      if (!w || !h) return;
+      const a = w / h;
+      camera.left = -d * a; camera.right = d * a;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    });
+  }
 })();
 </script>
 </body>
