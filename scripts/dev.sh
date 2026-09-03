@@ -190,6 +190,16 @@ cmd_rcon_lua() {
 
 # Rebuild the softmod save from the current mod/broadcast.lua and switch to it.
 cmd_softmod() {
+  # A running server holds the save open and writes it back on /quit, so a
+  # rebuild now would be silently overwritten by the script the server is
+  # already running - and "softmod then restart" looks like it worked while
+  # changing nothing. Stop first; the order has to be stop, build, start.
+  if server_pid >/dev/null; then
+    echo "server is running (pid $(server_pid)); it would save over the rebuild on shutdown" >&2
+    echo "run: $0 stop && $0 softmod && $0 start" >&2
+    exit 1
+  fi
+
   mkdir -p "$VANILLA_MODS"
   # Deliberately without factorio-broadcast: that is the whole point.
   cat > "$VANILLA_MODS/mod-list.json" <<'JSON'
@@ -216,8 +226,11 @@ cmd_sidecar_start() {
   if [[ -f "$SIDECAR_PID" ]] && kill -0 "$(cat "$SIDECAR_PID")" 2>/dev/null; then
     echo "sidecar already running (pid $(cat "$SIDECAR_PID"))"; return
   fi
-  setsid bash -c 'echo $$ > "$1"; exec "$2" "$3"' _ \
-    "$SIDECAR_PID" "$NODE" "$REPO/sidecar/src/index.ts" \
+  # The sidecar reads the server's name and description straight out of
+  # server-settings.json: the game never exposes them to Lua, so the mod cannot
+  # send them.
+  setsid bash -c 'export FB_SERVER_SETTINGS="$4"; echo $$ > "$1"; exec "$2" "$3"' _ \
+    "$SIDECAR_PID" "$NODE" "$REPO/sidecar/src/index.ts" "$SETTINGS" \
     </dev/null >"$SIDECAR_LOG" 2>&1 &
 
   for _ in $(seq 1 20); do [[ -s "$SIDECAR_PID" ]] && break; sleep 0.2; done

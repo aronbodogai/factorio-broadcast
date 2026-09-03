@@ -15,6 +15,12 @@ const WEB_ROOT = path.resolve(HERE, '../../web');
 const OUTPUT_DIR = process.env.FB_OUTPUT_DIR ?? path.join(process.env.HOME ?? '', 'fb/factorio/script-output');
 const SNAPSHOT_FILE = path.join(OUTPUT_DIR, 'broadcast.json');
 const HISTORY_FILE = path.join(OUTPUT_DIR, 'broadcast-history.json');
+
+// The server's own name and description live in server-settings.json, which the
+// game reads at startup and never exposes to Lua - LuaGameScript has no
+// server_settings. So the dashboard gets them the only way anything outside the
+// game can: by reading the same file. Optional; unset simply means no name.
+const SETTINGS_FILE = process.env.FB_SERVER_SETTINGS ?? '';
 const POLL_MS = Number(process.env.FB_POLL_MS ?? 200);
 const HTTP_PORT = Number(process.env.FB_HTTP_PORT ?? 8099);
 
@@ -68,6 +74,17 @@ const history: Record<string, Record<string, Record<string, number[]>>> = {};
 // Last value seen per surface per statistics window, so slow windows survive the
 // snapshots that omit them.
 const flowCache: Record<string, { items: Record<string, unknown>; fluids: Record<string, unknown> }> = {};
+
+// Read from server-settings.json rather than from the game, and polled like
+// everything else so renaming the server does not need a sidecar restart.
+let serverInfo: { name: string; description: string } | null = null;
+
+function applySettings(raw: any) {
+  const name = typeof raw?.name === 'string' ? raw.name.trim() : '';
+  const description = typeof raw?.description === 'string' ? raw.description.trim() : '';
+  // An unnamed server is the same as no file: the page keeps its own title.
+  serverInfo = name || description ? { name, description } : null;
+}
 
 // The game exposes no UPS reading - LuaProfiler measures real time but can only
 // be written to the log, never read back into Lua. Measuring it out here is both
@@ -165,6 +182,10 @@ function applySnapshot(raw: any) {
       playersOnline: raw.players_online,
       players: asArray(raw.players),
       surfaceNames: asArray<string>(raw.surface_names),
+      // The mod can read the mod list but not the server's own name: Lua has no
+      // access to server-settings.json, so that half comes from disk out here.
+      mods: (raw.mods ?? {}) as Record<string, string>,
+      server: serverInfo,
       // "all" is not a statistics window the game samples; it is the cumulative
       // total, which the mod sends alongside them.
       windows: [...asArray<string>(raw.windows), 'all'],
@@ -225,6 +246,9 @@ function readIfChanged(file: string, apply: (raw: any) => void) {
 }
 
 setInterval(() => {
+  // Settings first: a snapshot read in the same pass should carry the new name
+  // rather than the previous one.
+  if (SETTINGS_FILE) readIfChanged(SETTINGS_FILE, applySettings);
   readIfChanged(HISTORY_FILE, applyHistory);
   readIfChanged(SNAPSHOT_FILE, applySnapshot);
 }, POLL_MS);

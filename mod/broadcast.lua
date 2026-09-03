@@ -381,6 +381,11 @@ local function snapshot()
     t = tick,
     -- Absent when running as a softmod, which is how the sidecar tells them apart.
     mod_version = script.active_mods["factorio-broadcast"] or "scenario",
+    -- Static for the life of the run, and re-sent every snapshot anyway: a
+    -- sidecar that starts late, or restarts, would otherwise never learn it.
+    -- Four entries on a Space Age install, and table_to_json is the only cost
+    -- that scales with it - about a millisecond even at two hundred mods.
+    mods = script.active_mods,
     speed = q(game.speed),
     paused = game.tick_paused,
     surface_names = surface_names,

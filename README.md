@@ -202,7 +202,7 @@ wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/ideku/factorio-broadcast && bash scri
 | `dev.sh rcon-lua <file>` | Runs a Lua *file* — avoids shell quoting entirely. |
 | `dev.sh sidecar` / `sidecar-stop` | Sidecar lifecycle. |
 | `dev.sh reset-save` | Fresh save from the pristine source; needed after changing a setting default. |
-| `dev.sh softmod` / `mod` | Switch target. `softmod` rebuilds the scenario save from `mod/broadcast.lua` first; both need a `restart` to take effect. |
+| `dev.sh softmod` / `mod` | Switch target. `softmod` rebuilds the scenario save from `mod/broadcast.lua`; it refuses while the server is running, because `/quit` saves the running script back over the rebuild. The order is **stop, softmod, start** — `softmod` followed by `restart` silently discards the build. |
 | `dev.sh mode` | Which target the next start will use. |
 
 The edit loop is **edit `mod/control.lua` → `dev.sh restart` → assert**, about
@@ -333,6 +333,31 @@ default NAT networking it would need the WSL address instead.
 
 Note what does *not* pass through Cloudflare: the tunnel carries the statistics
 straight from the sidecar to the browser. The deployed site is the page only.
+
+### Server identity in the header
+
+The heading is the server, not the tool: its name, its description, and what it
+is running. The three come from two different places, because the game will not
+give up all of it.
+
+`script.active_mods` is readable from Lua, so the **mod list** rides along in
+every snapshot. It is static for a run, but re-sending it is what lets a sidecar
+that started late — or restarted — learn it at all, and the only cost that
+scales with it is `table_to_json`, about a millisecond even at two hundred mods.
+
+**Name and description** are not readable from Lua at all: `LuaGameScript` has no
+`server_settings`, and probing for it errors outright. They live in
+`server-settings.json`, which the game reads once at startup and never exposes.
+So the sidecar reads that same file, polled on the same mtime check as
+everything else, so renaming the server does not need a restart:
+
+```bash
+FB_SERVER_SETTINGS=~/fb/instance/server-settings.json node sidecar/src/index.ts
+```
+
+`dev.sh sidecar` passes it. Unset, or a server with no name, and the page keeps
+its own title. Ten mods are shown; any beyond that collapse into a `+N more`
+chip that names the rest on hover, rather than being dropped silently.
 
 ### Reading the status badge
 

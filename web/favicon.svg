@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Factorio Broadcast">
+  <!-- The hero's dot-matrix field, reduced to the three rows that still read at
+       16px. Radius rises towards the centre, which is the breathing wave frozen
+       at its crest - the same shape the canvas animates, in one frame. -->
+  <rect width="32" height="32" rx="6" fill="#0A0A0A"/>
+  <g fill="#00E5FF">
+    <circle cx="8"  cy="8"  r="1.7"/>
+    <circle cx="16" cy="8"  r="2.3"/>
+    <circle cx="24" cy="8"  r="1.7"/>
+
+    <circle cx="8"  cy="16" r="2.3"/>
+    <circle cx="16" cy="16" r="3.4" fill="#FFFFFF"/>
+    <circle cx="24" cy="16" r="2.3"/>
+
+    <circle cx="8"  cy="24" r="1.7"/>
+    <circle cx="16" cy="24" r="2.3"/>
+    <circle cx="24" cy="24" r="1.7"/>
+  </g>
+</svg>

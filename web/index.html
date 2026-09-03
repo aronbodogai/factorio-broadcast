@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Factorio Broadcast</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#0A0A0A">
 
 <!-- Bricolage Grotesque carries the display hierarchy; everything else is the
      system stack, so the page renders correctly before the font arrives. -->
@@ -176,6 +178,32 @@ h1 {
 @media (max-width: 720px) {
   h1 { font-size: 36px; line-height: 36px; }
 }
+
+/* A server name is whatever its owner typed — it can be long, and it can be one
+   unbroken token. Let it wrap rather than run out of the column. */
+h1 { overflow-wrap: anywhere; }
+
+.subtitle {
+  margin: 0;
+  max-width: 60ch;
+  color: var(--text-secondary);
+}
+
+.mods { display: flex; flex-wrap: wrap; gap: var(--s-1); }
+
+.mod {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  padding: 0 var(--s-2);
+  white-space: nowrap;
+}
+/* The game's own version is the one entry that is always present, so it reads
+   as fact rather than as another installed mod. */
+.mod.base { color: var(--text-secondary); border-color: var(--text-secondary); }
 
 .hero-meta {
   display: flex;
@@ -563,7 +591,9 @@ footer {
 
   <header class="hero">
     <div class="hero-text">
-      <h1>Factorio Broadcast</h1>
+      <h1 id="title">Factorio Broadcast</h1>
+      <p class="subtitle" id="subtitle" hidden></p>
+      <div class="mods" id="mods"></div>
       <div class="hero-meta">
         <span class="meta" id="clock">—</span>
         <select class="target" id="server" aria-label="Server" hidden></select>
@@ -946,6 +976,57 @@ function renderTip(series, window) {
   tip.style.top = '6px';
 }
 
+const MODS_SHOWN = 10;
+
+/**
+ * The hero carries the server's identity, not the tool's. Name and description
+ * come from server-settings.json by way of the sidecar; the mod list comes from
+ * script.active_mods inside the game. Any of the three can be missing — an
+ * unnamed server, or a sidecar started without FB_SERVER_SETTINGS — and the
+ * page falls back to its own title rather than showing an empty heading.
+ *
+ * Built as nodes: a server name and a mod list are both operator-supplied text
+ * arriving over the wire, and neither should be able to write markup here.
+ */
+function renderIdentity(meta) {
+  const server = meta.server || {};
+  const name = (server.name || '').trim() || 'Factorio Broadcast';
+  document.getElementById('title').textContent = name;
+  document.title = name === 'Factorio Broadcast' ? name : name + ' · Factorio Broadcast';
+
+  const subtitle = document.getElementById('subtitle');
+  const description = (server.description || '').trim();
+  subtitle.textContent = description;
+  subtitle.hidden = !description;
+
+  // base first: it is the game version, and reads as the thing everything else
+  // is installed on top of. The rest alphabetically.
+  const entries = Object.entries(meta.mods || {}).sort((a, b) => {
+    if (a[0] === 'base') return -1;
+    if (b[0] === 'base') return 1;
+    return a[0].localeCompare(b[0]);
+  });
+
+  const chips = entries.slice(0, MODS_SHOWN).map(([mod, version]) => {
+    const el = document.createElement('span');
+    el.className = mod === 'base' ? 'mod base' : 'mod';
+    el.textContent = `${mod} ${version}`;
+    return el;
+  });
+
+  // Never silently truncate: say how many are not shown, and name them on hover.
+  const hidden = entries.slice(MODS_SHOWN);
+  if (hidden.length) {
+    const more = document.createElement('span');
+    more.className = 'mod';
+    more.textContent = `+${hidden.length} more`;
+    more.title = hidden.map(([mod, version]) => `${mod} ${version}`).join('\n');
+    chips.push(more);
+  }
+
+  document.getElementById('mods').replaceChildren(...chips);
+}
+
 function render() {
   if (!snapshot) return;
   const names = snapshot.meta.surfaceNames || Object.keys(snapshot.surfaces);
@@ -961,6 +1042,8 @@ function render() {
 
   const s = snapshot.surfaces[surface];
   const m = snapshot.meta;
+
+  renderIdentity(m);
 
   // Totals across every network on this surface.
   const produced = s ? s.power.reduce((a, n) => a + n.producedW, 0) : 0;
@@ -1201,6 +1284,11 @@ function clearView() {
   for (const id of ids) document.getElementById(id).innerHTML = '';
   document.getElementById('tip').hidden = true;
   document.getElementById('clock').textContent = '—';
+  // The identity belongs to the server being left, heading and title included.
+  document.getElementById('title').textContent = 'Factorio Broadcast';
+  document.title = 'Factorio Broadcast';
+  document.getElementById('subtitle').hidden = true;
+  document.getElementById('mods').replaceChildren();
   document.getElementById('window-note').textContent = '';
   document.getElementById('foot').textContent = '—';
 }
