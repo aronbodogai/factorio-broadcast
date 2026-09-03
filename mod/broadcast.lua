@@ -18,7 +18,7 @@
     * no entity event subscriptions, for the same clobbering reason - electric
       networks are rediscovered on a timer instead.
 
-  Wire format (protocol 4)
+  Wire format (protocol 5)
   ------------------------
   Two JSON files in script-output, rewritten in place:
 
@@ -28,6 +28,13 @@
   Protocol 4 splits the history file per surface into { produced, consumed }.
   The in-game production screen draws a graph over each of its two panels, and
   ranking series by production alone left heavily-consumed items unplottable.
+
+  Protocol 5 encodes every item/fluid flow map - the windowed rates AND the
+  all-time totals - as one "name=value,name=value" string instead of a
+  {name: value} table. table_to_json on the table form measured 3.36 ms mean
+  per snapshot; the string form measured 2.6-4.5x cheaper at matching sizes.
+  See read_flow_windows for the numbers. Power and logistics stayed as tables:
+  both cost under 0.1 ms per tick already.
 
   This used to push datagrams with helpers.send_udp. It does not any more:
   send_udp costs 8-31 ms PER CALL - a fixed cost, not proportional to payload -
@@ -50,7 +57,7 @@
 
 local M = {}
 
-local PROTOCOL_VERSION = 4
+local PROTOCOL_VERSION = 5
 
 local SNAPSHOT_FILE = "broadcast.json"
 local HISTORY_FILE = "broadcast-history.json"
@@ -121,17 +128,43 @@ local function q(x)
   return math.floor(x * 100 + 0.5)
 end
 
---- Windowed rates for every prototype with a non-zero total, plus the all-time
---- totals - the "all" column of the in-game production screen.
+--- Windowed rates AND all-time totals, both encoded as "name=value,name=value"
+--- strings rather than {name: value} tables.
 ---
---- input_counts and output_counts are fetched once and reused across every
---- window: they are the set of prototypes this force has ever touched, so this
---- stays O(items produced) rather than O(every prototype in the game), and the
---- dictionaries are not rebuilt per window.
+--- Measured live: table_to_json over the payload this builds costs a mean of
+--- 3.36 ms EVERY snapshot - the single largest line item in the routine per-tick
+--- cost, ahead of all the flow-count reads combined (2.7 ms). A microbenchmark
+--- of the same shape, name=value string vs {name=value} table, both wrapped
+--- identically:
 ---
---- The all-time totals cost nothing extra - they are the *values* in those same
---- dictionaries, which the per-window loops only use for their keys. They are
---- sent unscaled, being exact counts rather than rates.
+---   entries   table_to_json(table)   join + table_to_json(string)   ratio
+---      40           0.133 ms                  0.052 ms              2.6x
+---     150           0.537 ms                  0.177 ms              3.0x
+---     500           2.016 ms                  0.672 ms              3.0x
+---    2000          11.778 ms                  0.076 ms              4.5x
+---
+--- Prototype names are kebab-case only - no "=" or "," ever appears in one - so
+--- neither delimiter needs escaping. Power (producers/consumers) and logistics
+--- (contents) are NOT converted: measured at 0.037 ms and 0.096 ms per tick
+--- across all five surfaces combined, converting them would not pay for the
+--- extra code path.
+local function flow_string(stats, names, category, precision)
+  local parts = {}
+  for name in pairs(names) do
+    local rate = stats.get_flow_count({ name = name, category = category, precision_index = precision })
+    if rate and rate > 0 then parts[#parts + 1] = name .. "=" .. q(rate) end
+  end
+  return table.concat(parts, ",")
+end
+
+local function count_string(names)
+  local parts = {}
+  for name, count in pairs(names) do
+    if count > 0 then parts[#parts + 1] = name .. "=" .. count end
+  end
+  return table.concat(parts, ",")
+end
+
 local function read_flow_windows(stats, windows)
   local inputs = stats.input_counts
   local outputs = stats.output_counts
@@ -139,25 +172,14 @@ local function read_flow_windows(stats, windows)
   local out = {}
   for _, window in pairs(windows) do
     local precision = WINDOWS[window]
-    local flow = { input = {}, output = {} }
-    for name in pairs(inputs) do
-      local rate = stats.get_flow_count({ name = name, category = "input", precision_index = precision })
-      if rate and rate > 0 then flow.input[name] = q(rate) end
-    end
-    for name in pairs(outputs) do
-      local rate = stats.get_flow_count({ name = name, category = "output", precision_index = precision })
-      if rate and rate > 0 then flow.output[name] = q(rate) end
-    end
-    out[window] = flow
+    out[window] = {
+      input = flow_string(stats, inputs, "input", precision),
+      output = flow_string(stats, outputs, "output", precision),
+    }
   end
 
-  local totals = { input = {}, output = {} }
-  for name, count in pairs(inputs) do
-    if count > 0 then totals.input[name] = count end
-  end
-  for name, count in pairs(outputs) do
-    if count > 0 then totals.output[name] = count end
-  end
+  -- All-time totals are exact counts, not rates - unscaled, unlike the windows.
+  local totals = { input = count_string(inputs), output = count_string(outputs) }
 
   return out, totals
 end
@@ -371,9 +393,20 @@ local function snapshot()
     -- Surface advances every burst, window only once the surfaces have all had
     -- a turn. The other order leaves a surface waiting a whole window cycle -
     -- eight bursts - before its graph is refreshed at all.
+    --
+    -- And every other burst is spent on the base window regardless. Rotating all
+    -- eight equally means a viewer sitting on the default 1m sees their graph
+    -- refresh once every forty bursts - over three minutes. Alternating cuts
+    -- that to ten. The windows that lose out are the long ones, where a 250-hour
+    -- average visibly does not move between refreshes anyway.
     if #names > 0 then
       history_surface = names[(burst % #names) + 1]
-      history_window = cfg.windows[(math.floor(burst / #names) % #cfg.windows) + 1]
+      local round = math.floor(burst / #names)
+      if round % 2 == 0 then
+        history_window = BASE_WINDOW
+      else
+        history_window = cfg.windows[(math.floor(round / 2) % #cfg.windows) + 1]
+      end
     end
   end
 

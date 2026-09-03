@@ -77,11 +77,6 @@ const HTTP_PORT = Number(process.env.FB_HTTP_PORT ?? 8099);
 // The mod scales every rate and energy by 100 to keep the JSON compact.
 const SCALE = 100;
 const un = (v: number | undefined): number => (v === undefined ? 0 : v / SCALE);
-const unMap = (m: Record<string, number> | undefined): Record<string, number> => {
-  const out: Record<string, number> = {};
-  for (const [k, v] of Object.entries(m ?? {})) out[k] = un(v);
-  return out;
-};
 
 // Electric network statistics are stored in Joules per tick, averaged over the
 // requested window - the same unit as LuaEntityPrototype::get_max_energy_usage,
@@ -153,20 +148,47 @@ function currentUps(): number | null {
   return (last.tick - first.tick) / seconds;
 }
 
-/** Protocol 3 reports each flow once per statistics window: {"1m": {input, output}}. */
-function normaliseFlowWindows(value: unknown) {
-  const out: Record<string, { produced: Record<string, number>; consumed: Record<string, number> }> = {};
-  for (const [window, flow] of Object.entries((value ?? {}) as Record<string, any>)) {
-    out[window] = { produced: unMap(flow?.input), consumed: unMap(flow?.output) };
+/**
+ * A flow map arrives as "name=value,name=value" (protocol 5) or {name: value}
+ * (protocol 3-4): table_to_json on the table form cost 3.36 ms mean per
+ * snapshot in the game - the single largest line item in the whole routine
+ * per-tick cost - and a same-shape microbenchmark measured the string form
+ * 2.6-4.5x cheaper, growing with size. Item and prototype names are kebab-case
+ * only, so "=" and "," never appear in one and need no escaping.
+ *
+ * `scale` divides by 100 for a windowed rate, or is the identity for an
+ * all-time total, which is an exact count rather than a rate.
+ */
+function parseFlowMap(value: unknown, scale: (n: number) => number): Record<string, number> {
+  if (typeof value !== 'string') return Object.fromEntries(
+    Object.entries((value ?? {}) as Record<string, number>).map(([k, v]) => [k, scale(v)]),
+  );
+  const out: Record<string, number> = {};
+  if (!value) return out;
+  for (const pair of value.split(',')) {
+    const eq = pair.indexOf('=');
+    if (eq < 0) continue;
+    out[pair.slice(0, eq)] = scale(Number(pair.slice(eq + 1)));
   }
   return out;
 }
 
+/** Protocol 3 reports each flow once per statistics window: {"1m": {input, output}}. */
+function normaliseFlowWindows(value: unknown) {
+  const out: Record<string, { produced: Record<string, number>; consumed: Record<string, number> }> = {};
+  for (const [window, flow] of Object.entries((value ?? {}) as Record<string, any>)) {
+    out[window] = { produced: parseFlowMap(flow?.input, un), consumed: parseFlowMap(flow?.output, un) };
+  }
+  return out;
+}
+
+const identity = (n: number) => n;
+
 /** All-time totals are exact counts, not rates, so they are not scaled by 100. */
 function totalsAsWindow(value: any) {
   return {
-    produced: { ...(value?.input ?? {}) } as Record<string, number>,
-    consumed: { ...(value?.output ?? {}) } as Record<string, number>,
+    produced: parseFlowMap(value?.input, identity),
+    consumed: parseFlowMap(value?.output, identity),
   };
 }
 
@@ -213,13 +235,21 @@ function applySnapshot(raw: any) {
   // Long windows are sampled on a slower cadence, so a snapshot carries only
   // the windows refreshed this tick. Merge rather than replace, keeping the
   // last value seen for every window.
+  // Two shapes are built here. `surfaces` is the complete picture, every window
+  // filled from cache, which is what /api/stats returns and what a client gets
+  // when it connects. `fresh` is only the windows this snapshot actually
+  // carried, which is what goes out every second: over half the item payload is
+  // the 1h-to-1000h windows, and the mod only refreshes those every thirtieth
+  // snapshot. Re-sending them 29 times out of 30 is the same waste history was.
   const surfaces: Record<string, unknown> = {};
+  const freshSurfaces: Record<string, unknown> = {};
   for (const [name, surface] of Object.entries((raw.surfaces ?? {}) as Record<string, any>)) {
     const fresh = normaliseSurface(surface);
     const cache = flowCache[name] ?? (flowCache[name] = { items: {}, fluids: {} });
     Object.assign(cache.items, fresh.items);
     Object.assign(cache.fluids, fresh.fluids);
     surfaces[name] = { ...fresh, items: cache.items, fluids: cache.fluids };
+    freshSurfaces[name] = fresh;
   }
 
   latest = {
@@ -250,7 +280,15 @@ function applySnapshot(raw: any) {
   };
   stats.snapshots++;
 
-  const frame = `data: ${JSON.stringify(latest)}\n\n`;
+  // History is deliberately NOT in the per-second frame. It is by far the
+  // largest part of the payload - 297 KB of a 352 KB frame - and it changes once
+  // every five seconds, for one surface and one window at a time. Re-encoding
+  // and re-sending all of it every second cost the sidecar, the tunnel and the
+  // browser about six times what the actual news is worth. It goes out as its
+  // own event when it changes, and once in full when a client connects.
+  // partial: the receiver must merge these windows over what it already has,
+  // rather than replacing. The full picture went out when it connected.
+  const frame = `data: ${JSON.stringify({ ...latest, history: undefined, surfaces: freshSurfaces, partial: true })}\n\n`;
   for (const res of clients) res.write(frame);
 }
 
@@ -302,6 +340,11 @@ function applyHistory(raw: any) {
 
     history[surface] = history[surface] ?? {};
     history[surface][window] = normalised;
+
+    // Only the slice that changed: one surface, one window. The mod writes one
+    // of these per burst, so this is the whole delta.
+    const frame = `event: history\ndata: ${JSON.stringify({ [surface]: { [window]: normalised } })}\n\n`;
+    for (const res of clients) res.write(frame);
   }
 }
 
@@ -371,7 +414,11 @@ const server = http.createServer((req, res) => {
       'Cache-Control': 'no-store',
       Connection: 'keep-alive',
     });
-    if (latest) res.write(`data: ${JSON.stringify(latest)}\n\n`);
+    // Full history once, so a page that has just connected can draw; after this
+    // only the slice that changed is sent. Named event, while snapshots stay on
+    // the default one, so a client that only implements onmessage still works.
+    res.write(`event: history\ndata: ${JSON.stringify(history)}\n\n`);
+    if (latest) res.write(`data: ${JSON.stringify({ ...latest, history: undefined })}\n\n`);
     clients.add(res);
     req.on('close', () => clients.delete(res));
     return;

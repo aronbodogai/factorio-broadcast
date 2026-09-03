@@ -918,6 +918,9 @@ const selected = new Set();
 // The slot being hovered, which highlights its line without hiding the others.
 let hovered = null;
 let hoverPanel = null;
+// Graph series, kept here rather than read out of each snapshot: they arrive on
+// their own event and outlive any one frame.
+let history = {};
 // One filter box per list, by panel key. The game puts a magnifier in the
 // window chrome that opens a field; these sit in each panel header instead,
 // because each panel here has its own list.
@@ -1529,7 +1532,7 @@ function render() {
       // Count what is actually drawn: a planet accumulates stub networks with
       // no flow at all, and reporting eight where one is shown is just wrong.
       live ? `${live} network(s) on ${pretty(surface)} · 1m window` : 'per electric network';
-    const powerSeries = (((snapshot.history || {})[surface] || {})[selectedWindow] || {}).power;
+    const powerSeries = ((history[surface] || {})[selectedWindow] || {}).power;
     renderPower(document.getElementById('power'), s ? s.power : [], powerSeries);
   }
 
@@ -1551,7 +1554,7 @@ function render() {
 
   // The graph series for this surface, window and kind. "all" is a cumulative
   // count rather than a sampled window, so the game hides the graphs there too.
-  const bucket = ((snapshot.history || {})[surface] || {})[selectedWindow] || {};
+  const bucket = (history[surface] || {})[selectedWindow] || {};
   const panels = bucket[kind === 'fluids' ? 'fluids' : 'items'] || { produced: {}, consumed: {} };
 
   for (const panel of ['produced', 'consumed']) {
@@ -1871,6 +1874,7 @@ function selectTarget(id) {
   streamOpen = false;
   hoverIndex = null;
   colourSlots.clear();
+  history = {};
   clearView();
   setStatus('', 'connecting…');
   connect();
@@ -1913,14 +1917,57 @@ function setStatus(cls, text) {
   document.getElementById('conn').textContent = text;
 }
 
+/**
+ * Fold a frame into the one before it.
+ *
+ * A frame marked `partial` carries only the statistics windows that actually
+ * changed this second — the 1h-to-1000h averages are refreshed by the mod every
+ * thirtieth snapshot, and re-sending them the other twenty-nine times was over
+ * half the payload. Everything outside items and fluids is current every frame
+ * and replaces outright; those two merge window by window.
+ *
+ * The first frame after connecting is never partial, so there is always a
+ * complete picture underneath.
+ */
+function merge(previous, frame) {
+  if (!frame.partial || !previous) return frame;
+
+  const surfaces = { ...previous.surfaces };
+  for (const [name, fresh] of Object.entries(frame.surfaces || {})) {
+    const old = surfaces[name];
+    surfaces[name] = !old ? fresh : {
+      ...fresh,
+      items: { ...old.items, ...fresh.items },
+      fluids: { ...old.fluids, ...fresh.fluids },
+    };
+  }
+  return { ...frame, surfaces };
+}
+
 function connect() {
   const source = new EventSource(api('/api/stream'));
   stream = source;
 
+  // History arrives on its own event: it is the bulk of the payload and changes
+  // once every few seconds, for one surface and window at a time, so it is sent
+  // in full on connect and as a slice thereafter. Merged per surface so a slice
+  // never drops the windows it does not mention.
+  source.addEventListener('history', (event) => {
+    if (stream !== source) return;
+    try {
+      for (const [surface, windows] of Object.entries(JSON.parse(event.data))) {
+        history[surface] = Object.assign(history[surface] || {}, windows);
+      }
+      if (snapshot) render();
+    } catch (err) {
+      /* a malformed slice must not take the snapshot stream down with it */
+    }
+  });
+
   source.onmessage = (event) => {
     if (stream !== source) return; // superseded by a target switch
     try {
-      snapshot = JSON.parse(event.data);
+      snapshot = merge(snapshot, JSON.parse(event.data));
       // A frame arriving is not the same as the game running. The sidecar
       // replays its last snapshot to every stream that connects, so a paused
       // server hands out a fresh-looking frame each time the connection is
