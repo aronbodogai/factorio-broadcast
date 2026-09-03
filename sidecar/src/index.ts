@@ -106,7 +106,7 @@ type Snapshot = {
   ups: number | null;
   meta: Record<string, unknown>;
   surfaces: Record<string, unknown>;
-  history: Record<string, Record<string, { items: SeriesPanels; fluids: SeriesPanels }>>;
+  history: Record<string, Record<string, { items: SeriesPanels; fluids: SeriesPanels; power: Record<string, SeriesPanels> }>>;
 };
 
 let latest: Snapshot | null = null;
@@ -121,7 +121,7 @@ const stats = {
 
 // Graph series arrive on their own slower cadence, one window per burst, so they
 // are kept here and merged into every snapshot rather than expiring with one.
-const history: Record<string, Record<string, { items: SeriesPanels; fluids: SeriesPanels }>> = {};
+const history: Record<string, Record<string, { items: SeriesPanels; fluids: SeriesPanels; power: Record<string, SeriesPanels> }>> = {};
 
 // Last value seen per surface per statistics window, so slow windows survive the
 // snapshots that omit them.
@@ -185,6 +185,9 @@ function normaliseSurface(d: any) {
     fluids,
     power: asArray<any>(d.power).map((n) => ({
       id: n.id,
+      // Discovered on a surface with no electric poles, so the game will not
+      // give up its statistics. Present, but unmeasurable.
+      noStats: !!n.no_stats,
       producedW: watts(n.produced_j),
       consumedW: watts(n.consumed_j),
       satisfaction: un(n.satisfaction),
@@ -251,11 +254,20 @@ function applySnapshot(raw: any) {
   for (const res of clients) res.write(frame);
 }
 
-/** Index 0 is the most recent sample; reverse so charts read left to right. */
-function normaliseSeries(series: Record<string, number[]> | undefined) {
+/**
+ * Index 0 is the most recent sample; reverse so charts read left to right.
+ *
+ * Protocol 4 sends each series as one comma-separated string, because
+ * table_to_json over 6000 numbers costs the game 19 ms where the same values as
+ * 20 strings cost 0.1 ms. Arrays are still accepted: same wire bytes, older mod.
+ */
+function normaliseSeries(series: Record<string, number[] | string> | undefined) {
   const out: Record<string, number[]> = {};
   for (const [item, values] of Object.entries(series ?? {})) {
-    out[item] = asArray<number>(values).map(un).reverse();
+    const numbers = typeof values === 'string'
+      ? (values ? values.split(',').map(Number) : [])
+      : asArray<number>(values);
+    out[item] = numbers.map(un).reverse();
   }
   return out;
 }
@@ -272,13 +284,20 @@ function applyHistory(raw: any) {
     // save still running the old scenario script - keeps plotting.
     const panels = (v: any) => (v ? { produced: normaliseSeries(v.produced), consumed: normaliseSeries(v.consumed) } : emptyPanels());
 
+    // Electricity is keyed by network id, each holding the same produced /
+    // consumed pair - the two graphs of the in-game electric network window.
+    const power: Record<string, { produced: Record<string, number[]>; consumed: Record<string, number[]> }> = {};
+    for (const [id, nets] of Object.entries((series?.power ?? {}) as Record<string, any>)) {
+      power[id] = panels(nets);
+    }
+
     let normalised;
     if (series && (series.items || series.fluids)) {
-      normalised = { items: panels(series.items), fluids: panels(series.fluids) };
+      normalised = { items: panels(series.items), fluids: panels(series.fluids), power };
     } else if (series && (series.produced || series.consumed)) {
-      normalised = { items: panels(series), fluids: emptyPanels() };
+      normalised = { items: panels(series), fluids: emptyPanels(), power };
     } else {
-      normalised = { items: { produced: normaliseSeries(series), consumed: {} }, fluids: emptyPanels() };
+      normalised = { items: { produced: normaliseSeries(series), consumed: {} }, fluids: emptyPanels(), power };
     }
 
     history[surface] = history[surface] ?? {};

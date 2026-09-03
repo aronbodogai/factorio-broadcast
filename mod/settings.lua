@@ -37,14 +37,15 @@ data:extend({
     order = "e",
   },
   {
-    -- How many items per surface get their 300-sample graph series sent.
-    -- Zero disables graph history entirely.
+    -- A ceiling on how many items per surface get a graph series. The default
+    -- is high enough that every item moving in the window gets one; lower it on
+    -- a save large enough for that to cost real time. Zero disables history.
     type = "int-setting",
     name = "fb-history-items",
     setting_type = "runtime-global",
-    default_value = 10,
+    default_value = 1000,
     minimum_value = 0,
-    maximum_value = 20,
+    maximum_value = 1000,
     order = "f",
   },
   {

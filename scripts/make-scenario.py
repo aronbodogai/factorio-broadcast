@@ -42,7 +42,7 @@ def main() -> int:
     parser.add_argument("--rescan", type=int, default=300)
     parser.add_argument("--windows", default="5s,1m,10m,1h,10h,50h,250h,1000h")
     parser.add_argument("--slow-every", type=int, default=30)
-    parser.add_argument("--history-items", type=int, default=10)
+    parser.add_argument("--history-items", type=int, default=1000)
     parser.add_argument("--history-every", type=int, default=5)
     args = parser.parse_args()
 

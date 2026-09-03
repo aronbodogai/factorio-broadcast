@@ -647,14 +647,23 @@ summary {
   grid-template-columns: 10px 20px minmax(0, 118px) 1fr auto;
 }
 
-/* Factorio's icons are 64px; 20 is the size the in-game list uses them at, and
-   pixelated keeps them crisp rather than smeared by the downscale. */
+/* Factorio ships each icon as a MIPMAP STRIP, not a single image: iron-plate.png
+   is 120x64, being the 64px icon followed by its 32, 16 and 8px reductions laid
+   out to the right. Drawn whole it looks like the icon with three shrinking
+   copies trailing off it.
+
+   So it is a background rather than an <img>: sizing to "auto 100%" makes the
+   strip's height fill the box and anchoring it left shows exactly the first,
+   largest square. A plain square icon with no mipmaps fills the box the same
+   way, so this needs no per-file knowledge. */
 .icon {
   width: 20px;
   height: 20px;
-  object-fit: contain;
-  image-rendering: pixelated;
   flex: none;
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: auto 100%;
+  image-rendering: pixelated;
 }
 
 /* Hover-to-highlight, added to the game in 2.0.7: the hovered line stays, the
@@ -665,6 +674,39 @@ summary {
 .panel .chart-wrap { margin-bottom: var(--s-4); }
 
 .net-card + .net-card { margin-top: var(--s-4); }
+
+/* The search control the game puts in its window chrome: a magnifier that
+   opens a field. One per list, since each panel here owns its own. */
+.search-toggle {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+  margin-left: auto;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.search-toggle:hover { color: var(--text-primary); border-color: var(--border-strong); }
+
+.search-input {
+  appearance: none;
+  background: var(--track);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px var(--s-2);
+  width: 140px;
+}
+.search-input:focus { outline: none; border-color: var(--primary); }
+
+/* A network graph is a sparkline, not a plot: no axes, no labels, just shape. */
+.power-chart { height: 46px; margin-bottom: var(--s-2); }
 
 /* The L screen's item table: a grid of icons with a count badge, not a list. */
 .contents {
@@ -783,6 +825,8 @@ footer {
     <section class="card panel">
       <div class="panel-head">
         <h2>Production</h2>
+        <button class="search-toggle" data-search="produced" aria-label="Search" title="Search">⌕</button>
+        <input class="search-input" data-search-input="produced" type="search" placeholder="Filter…" hidden>
         <button class="reset" data-reset="produced" hidden>Reset filters</button>
       </div>
       <div class="hint window-hint">per minute</div>
@@ -796,6 +840,8 @@ footer {
     <section class="card panel">
       <div class="panel-head">
         <h2>Consumption</h2>
+        <button class="search-toggle" data-search="consumed" aria-label="Search" title="Search">⌕</button>
+        <input class="search-input" data-search-input="consumed" type="search" placeholder="Filter…" hidden>
         <button class="reset" data-reset="consumed" hidden>Reset filters</button>
       </div>
       <div class="hint window-hint">per minute</div>
@@ -809,7 +855,11 @@ footer {
 
   <div id="panel-electricity" hidden>
     <section class="card">
-      <h2>Electric networks</h2>
+      <div class="panel-head">
+        <h2>Electric networks</h2>
+        <button class="search-toggle" data-search="power" aria-label="Search" title="Search">⌕</button>
+        <input class="search-input" data-search-input="power" type="search" placeholder="Filter…" hidden>
+      </div>
       <div class="hint" id="power-hint">per electric network</div>
       <div id="power"></div>
     </section>
@@ -819,6 +869,8 @@ footer {
     <section class="card">
       <div class="panel-head">
         <h2>Logistic networks</h2>
+        <button class="search-toggle" data-search="logistics" aria-label="Search" title="Search">⌕</button>
+        <input class="search-input" data-search-input="logistics" type="search" placeholder="Filter…" hidden>
         <select class="target" id="network" aria-label="Logistic network" hidden></select>
       </div>
       <div class="hint" id="logistics-hint">per network on this surface</div>
@@ -835,7 +887,10 @@ footer {
 // The list shows everything with a non-zero rate, as the game does. Only the
 // graph is bounded, and only because each line costs the game 300 API reads.
 const TOP_N = Infinity;
-const CHART_SERIES = 8;   // as many lines as the palette can keep apart
+// Every item gets a line, as in game. The palette has eight entries and wraps,
+// so colour alone stops identifying a line once there are more than eight —
+// which is what the slot list, the hover highlight and click-to-isolate are for.
+const PALETTE = 8;
 
 // How much wall-clock each statistics window covers. Each window holds 300
 // samples spread across this span.
@@ -863,6 +918,11 @@ const selected = new Set();
 // The slot being hovered, which highlights its line without hiding the others.
 let hovered = null;
 let hoverPanel = null;
+// One filter box per list, by panel key. The game puts a magnifier in the
+// window chrome that opens a field; these sit in each panel header instead,
+// because each panel here has its own list.
+const search = { produced: '', consumed: '', power: '', logistics: '' };
+
 // Which logistic network the L-screen equivalent is showing, by network_id.
 let logisticNetwork = null;
 
@@ -915,8 +975,8 @@ function pretty(name) {
  * is why the name is always rendered too.
  */
 function icon(name) {
-  return `<img class="icon" src="${target.url}/icons/${encodeURIComponent(name)}.png"
-    alt="" loading="lazy" onerror="this.remove()">`;
+  return `<span class="icon" role="img" aria-label="${pretty(name)}"
+    style="background-image:url('${target.url}/icons/${encodeURIComponent(name)}.png')"></span>`;
 }
 
 // ---- rendering ------------------------------------------------------------
@@ -950,7 +1010,7 @@ function renderSlots(el, entries, format, panel, slotOf, selected) {
     const plottable = slot !== undefined;
     const on = selected.has(name);
     const key = plottable
-      ? `<span class="slot-key" style="background:var(--series-${slot + 1});border-color:var(--series-${slot + 1})"></span>`
+      ? `<span class="slot-key" style="background:var(--series-${(slot % PALETTE) + 1});border-color:var(--series-${(slot % PALETTE) + 1})"></span>`
       : '<span class="slot-key"></span>';
     const title = plottable
       ? `${pretty(name)}: ${format(value)} — click to filter the graph`
@@ -1002,6 +1062,21 @@ function scienceRates(snapshot, window) {
   return { spm, packs, types: Object.keys(consumed).length };
 }
 
+/**
+ * Substring match on the prototype name and on the prettified label, so both
+ * "iron-plate" and "Iron plate" find it. Case-insensitive, and applied on every
+ * keystroke rather than on submit.
+ */
+function matches(name, term) {
+  if (!term) return true;
+  const needle = term.toLowerCase();
+  return name.toLowerCase().includes(needle) || pretty(name).toLowerCase().includes(needle);
+}
+
+function filterEntries(entries, term) {
+  return term ? entries.filter(([name]) => matches(name, term)) : entries;
+}
+
 function topEntries(map, n) {
   return Object.entries(map || {})
     .filter(([, v]) => v > 0)
@@ -1015,8 +1090,10 @@ function satClass(pct) {
   return 'critical';
 }
 
-function renderPower(el, networks) {
-  const live = networks.filter((n) => n.producedW > 0 || n.consumedW > 0);
+function renderPower(el, networks, series) {
+  // A network the game will not measure still gets a card, so the surface does
+  // not read as having no power at all.
+  const live = networks.filter((n) => n.noStats || n.producedW > 0 || n.consumedW > 0);
   if (!live.length) {
     el.innerHTML = '<div class="empty">No powered network on this surface.</div>';
     return;
@@ -1027,8 +1104,9 @@ function renderPower(el, networks) {
     const cls = satClass(net.satisfaction);
     // Icon + label, never colour alone.
     const mark = cls === 'good' ? '✓' : cls === 'warning' ? '!' : '✕';
-    const producers = topEntries(net.producersW, 5);
-    const consumers = topEntries(net.consumersW, 6);
+    // The filter reaches the per-entity breakdown, which is the only list here.
+    const producers = filterEntries(topEntries(net.producersW, Infinity), search.power);
+    const consumers = filterEntries(topEntries(net.consumersW, Infinity), search.power);
     const scale = Math.max(
       producers.length ? producers[0][1] : 0,
       consumers.length ? consumers[0][1] : 0,
@@ -1042,18 +1120,60 @@ function renderPower(el, networks) {
       </div>`;
     }).join('');
 
+    if (net.noStats) {
+      return `<div class="net">
+        <div class="net-head"><span class="net-title">Network ${net.id}</span></div>
+        <div class="empty">This surface has no electric pole, and the game exposes
+          network statistics through poles and nowhere else — not through the
+          accumulator that identified the network, not through the force, not
+          through the surface. One pole anywhere on it would make this measurable.</div>
+      </div>`;
+    }
     return `<div class="net">
       <div class="net-head">
         <span class="net-title">Network ${net.id}</span>
         <span class="sat ${cls}">${mark} ${net.satisfaction.toFixed(0)}% satisfied</span>
         <span class="net-nums">${watts(net.producedW)} produced · ${watts(net.consumedW)} drawn</span>
       </div>
+      ${powerChart(net.id, series, 'produced', 'Production')}
       <div class="bar-group">Producing</div>
       <div class="bars">${row(producers, false) || '<div class="empty">—</div>'}</div>
+      ${powerChart(net.id, series, 'consumed', 'Consumption')}
       <div class="bar-group">Drawing</div>
       <div class="bars">${row(consumers, true) || '<div class="empty">—</div>'}</div>
     </div>`;
   }).join('');
+}
+
+/**
+ * One of the electric network window's two line graphs. Same 300-sample series
+ * the item graphs use, read off pole.electric_network_statistics — which is a
+ * LuaFlowStatistics like any other, so the machinery is shared.
+ *
+ * Drawn inline rather than through renderChart: these are small, there is one
+ * per network per direction, and they carry no crosshair or selection.
+ */
+function powerChart(id, series, panel, label) {
+  const lines = ((series || {})[String(id)] || {})[panel] || {};
+  const names = Object.keys(lines);
+  if (!names.length) return '';
+
+  const W = 600, H = 90, T = 4, B = 4;
+  const points = Math.max(...names.map((n) => lines[n].length));
+  // Joules per tick on the wire; watts is that times the 60 ticks in a second.
+  const max = Math.max(...names.flatMap((n) => lines[n]), 1) * 60;
+
+  const x = (i) => (i / Math.max(1, points - 1)) * W;
+  const y = (v) => T + (1 - (v * 60) / max) * (H - T - B);
+
+  const paths = names.map((name, i) => {
+    const d = lines[name].map((v, idx) => `${idx === 0 ? 'M' : 'L'}${x(idx).toFixed(1)},${y(v).toFixed(1)}`).join('');
+    return `<path class="line" d="${d}" stroke="var(--series-${(i % PALETTE) + 1})" vector-effect="non-scaling-stroke"/>`;
+  }).join('');
+
+  return `<div class="bar-group">${label} · peak ${watts(max)}</div>
+    <svg class="chart power-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"
+      role="img" aria-label="${label} over time">${paths}</svg>`;
 }
 
 // Colour follows the item, never its rank: the mod sends whichever items are
@@ -1101,7 +1221,7 @@ function assignSlots(surfaceName, names) {
 function renderChart(panel, series, window, slotOf, selected, emptyMessage) {
   const svg = document.getElementById(`chart-${panel}`);
   const all = Object.keys(series);
-  const names = (selected.size ? all.filter((n) => selected.has(n)) : all).slice(0, CHART_SERIES);
+  const names = selected.size ? all.filter((n) => selected.has(n)) : all;
 
   if (!names.length) {
     // Collapse rather than leave the plot's height as dead space.
@@ -1133,7 +1253,7 @@ function renderChart(panel, series, window, slotOf, selected, emptyMessage) {
     const slot = slotOf.get(name) ?? 0;
     const d = values.map((v, idx) => `${idx === 0 ? 'M' : 'L'}${x(idx).toFixed(1)},${y(v).toFixed(1)}`).join('');
     const state = hovered && hovered !== name ? ' dim' : (hovered === name ? ' hot' : '');
-    return `<path class="line${state}" d="${d}" stroke="var(--series-${slot + 1})" vector-effect="non-scaling-stroke"/>`;
+    return `<path class="line${state}" d="${d}" stroke="var(--series-${(slot % PALETTE) + 1})" vector-effect="non-scaling-stroke"/>`;
   }).join('');
 
   const cross = hoverIndex === null || hoverPanel !== panel ? '' :
@@ -1162,7 +1282,7 @@ function renderTip(panel, series, window, slotOf) {
   tip.innerHTML =
     `<div class="when">${ago === 0 ? 'now' : `${((ago / (points - 1)) * 100).toFixed(0)}% of ${WINDOW_SPAN[window] || window} ago`}</div>` +
     names.map((n) =>
-      `<div class="row"><span class="swatch" style="background:var(--series-${(slotOf.get(n) ?? 0) + 1})"></span>${pretty(n)}<span class="v">${rate(series[n][hoverIndex] ?? 0)}</span></div>`
+      `<div class="row"><span class="swatch" style="background:var(--series-${((slotOf.get(n) ?? 0) % PALETTE) + 1})"></span>${pretty(n)}<span class="v">${rate(series[n][hoverIndex] ?? 0)}</span></div>`
     ).join('');
 
   const wrap = svg.parentElement;
@@ -1292,7 +1412,7 @@ function renderLogistics(el, networks) {
  */
 function contentsGrid(contents) {
   const entries = Object.entries(contents || {})
-    .filter(([, n]) => n > 0)
+    .filter(([name, n]) => n > 0 && matches(name, search.logistics))
     .sort((a, b) => b[1] - a[1]);
 
   if (!entries.length) {
@@ -1404,9 +1524,13 @@ function render() {
   ].join('');
 
   if (section === 'electricity') {
+    const live = s ? s.power.filter((n) => n.noStats || n.producedW > 0 || n.consumedW > 0).length : 0;
     document.getElementById('power-hint').textContent =
-      s && s.power.length ? `${s.power.length} network(s) on ${pretty(surface)} · 1m window` : 'per electric network';
-    renderPower(document.getElementById('power'), s ? s.power : []);
+      // Count what is actually drawn: a planet accumulates stub networks with
+      // no flow at all, and reporting eight where one is shown is just wrong.
+      live ? `${live} network(s) on ${pretty(surface)} · 1m window` : 'per electric network';
+    const powerSeries = (((snapshot.history || {})[surface] || {})[selectedWindow] || {}).power;
+    renderPower(document.getElementById('power'), s ? s.power : [], powerSeries);
   }
 
   if (section === 'logistics') {
@@ -1432,7 +1556,7 @@ function render() {
 
   for (const panel of ['produced', 'consumed']) {
     const series = isTotals ? {} : (panels[panel] || {});
-    const entries = topEntries(flows[panel], TOP_N);
+    const entries = filterEntries(topEntries(flows[panel], TOP_N), search[panel]);
     // Colour by the series present, so a slot's key matches its line.
     const slotOf = new Map();
     assignSlots(`${surface}|${kind}|${panel}`, Object.keys(series)).forEach((slot, i) => {
@@ -1521,6 +1645,37 @@ for (const panel of ['produced', 'consumed']) {
   list.addEventListener('mouseleave', () => {
     if (hovered === null) return;
     hovered = null;
+    render();
+  });
+}
+
+// The magnifier reveals the field; the field filters as it is typed into.
+// Escape, or emptying it, puts it away again.
+for (const button of document.querySelectorAll('.search-toggle')) {
+  button.addEventListener('click', () => {
+    const key = button.dataset.search;
+    const input = document.querySelector(`.search-input[data-search-input="${key}"]`);
+    input.hidden = !input.hidden;
+    if (input.hidden) {
+      search[key] = '';
+      input.value = '';
+      render();
+    } else {
+      input.focus();
+    }
+  });
+}
+
+for (const input of document.querySelectorAll('.search-input')) {
+  input.addEventListener('input', () => {
+    search[input.dataset.searchInput] = input.value.trim();
+    render();
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    search[input.dataset.searchInput] = '';
+    input.value = '';
+    input.hidden = true;
     render();
   });
 }

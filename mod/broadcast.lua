@@ -55,9 +55,13 @@ local PROTOCOL_VERSION = 4
 local SNAPSHOT_FILE = "broadcast.json"
 local HISTORY_FILE = "broadcast-history.json"
 
--- Each precision level holds 300 samples covering its whole window, which is
--- exactly the data behind the in-game statistics graphs.
+-- Each precision level holds 300 samples covering its whole window - exactly the
+-- data behind the in-game statistics graphs - and every other one is read. The
+-- plot is 600 px wide, so 150 points land 4 px apart and the halving is not
+-- visible; it is, however, half the reads and half the string to build, and
+-- that is what pays for graphing every item rather than the top ten.
 local SAMPLES_PER_WINDOW = 300
+local SAMPLE_STRIDE = 2
 
 local WINDOWS = {
   ["5s"] = defines.flow_precision_index.five_seconds,
@@ -102,7 +106,10 @@ local function config()
     windows = split_windows(c.windows or "5s,1m,10m,1h,10h,50h,250h,1000h"),
     -- Graph series are large, so they go out on their own slower cadence and
     -- cover one window per burst, rotating through the configured windows.
-    history_items = c.history_items or 10,
+    -- A ceiling on graph lines, not a selection: the default is high enough
+    -- that every item moving in the window gets one. Zero still disables
+    -- history entirely, as it always did.
+    history_items = c.history_items or 1000,
     history_every = c.history_every or 5,
     slow_every = c.slow_every or 30,
   }
@@ -159,32 +166,62 @@ end
 --- Index 1 is the most recent sample.
 --- category is "input" for what was produced, "output" for what was consumed.
 --- The in-game production screen graphs both, one per panel, so both are sent.
+---
+--- Returns the samples as ONE comma-separated string rather than an array of
+--- numbers, which is the single biggest saving in this file. Measured on 20
+--- series of 300 samples:
+---
+---   table_to_json over arrays of numbers   19.1 ms
+---   table.concat into strings               5.6 ms
+---   table_to_json over those strings        0.1 ms
+---
+--- Same bytes on the wire either way - 27012 - but the encoder walks 20 values
+--- instead of 6000. The sidecar splits on the comma.
 local function read_series(stats, name, window, category)
   local precision = WINDOWS[window]
   local series = {}
-  for sample = 1, SAMPLES_PER_WINDOW do
-    series[sample] = q(stats.get_flow_count({
+  local n = 0
+  for sample = 1, SAMPLES_PER_WINDOW, SAMPLE_STRIDE do
+    n = n + 1
+    series[n] = q(stats.get_flow_count({
       name = name,
       category = category,
       precision_index = precision,
       sample_index = sample,
     }))
   end
-  return series
+  return table.concat(series, ",")
 end
 
 --- One electric pole per distinct electric network, cached: find_entities_filtered
 --- over a whole surface is far too expensive to run every second.
+-- A space platform carries no electric poles at all - measured on this save,
+-- platform-1 has 0 poles beside 11 solar panels and an accumulator - so a
+-- pole-only scan reports no electric network there, which is wrong rather than
+-- empty. Any powered entity knows its network, so these stand in when a surface
+-- has no poles. Kept as a fallback rather than the primary scan because on a
+-- planet the list would match tens of thousands of entities where the poles are
+-- a few thousand, and one per network is all that is wanted.
+local NETWORK_PROXIES = {
+  "solar-panel", "accumulator", "generator", "reactor",
+  "asteroid-collector", "crusher", "assembling-machine", "furnace", "lab",
+}
+
 local function rescan_networks()
   storage.fb_poles = {}
   for _, surface in pairs(game.surfaces) do
+    local found = surface.find_entities_filtered({ type = "electric-pole" })
+    if #found == 0 then
+      found = surface.find_entities_filtered({ type = NETWORK_PROXIES })
+    end
+
     local seen = {}
     local list = {}
-    for _, pole in pairs(surface.find_entities_filtered({ type = "electric-pole" })) do
-      local id = pole.electric_network_id
+    for _, entity in pairs(found) do
+      local id = entity.electric_network_id
       if id and not seen[id] then
         seen[id] = true
-        list[#list + 1] = pole
+        list[#list + 1] = entity
       end
     end
     storage.fb_poles[surface.name] = list
@@ -199,7 +236,16 @@ local function read_power(surface_name)
 
   local precision = WINDOWS[BASE_WINDOW]
   for _, pole in pairs(poles) do
-    if pole.valid then
+    if pole.valid and pole.type ~= "electric-pole" then
+      -- Discovered through a proxy, on a surface with no poles at all. The
+      -- network is real and its id is readable, but electric_network_statistics
+      -- is exposed on electric poles and nowhere else - not on the accumulator
+      -- that answered, not on the force, not on the surface. Verified by
+      -- probing all four. So the network is reported as present and unmeasured
+      -- rather than silently dropped; one electric pole anywhere on the
+      -- platform would make it measurable.
+      networks[#networks + 1] = { id = pole.electric_network_id, no_stats = true }
+    elseif pole.valid then
       local stats = pole.electric_network_statistics
       local produced, consumed = 0, 0
       local by_producer, by_consumer = {}, {}
@@ -277,10 +323,11 @@ local function write(filename, payload)
   return #json
 end
 
---- The n highest-rate prototype names in a flow map.
+--- The n highest-rate prototype names in a flow map, or all of them when n is nil.
 local function top_names(flow_map, n)
   local names = {}
   for name in pairs(flow_map) do names[#names + 1] = name end
+  if n == nil then n = #names end
   -- Sort by rate, then by name so the choice is stable and deterministic
   -- across peers when two items are producing at the same rate.
   table.sort(names, function(a, b)
@@ -306,18 +353,37 @@ local function snapshot()
     rescan_networks()
   end
 
-  -- One window's worth of graph series per burst, rotating, so the extra work
-  -- stays flat no matter how many windows are configured.
+  -- One window AND one surface per burst, both rotating, so the extra work stays
+  -- flat however many of either there are. Graphing every item rather than the
+  -- top ten multiplies the series count; spreading them keeps any single tick
+  -- affordable. The sidecar holds what it has already been sent, so a surface
+  -- waiting its turn keeps showing its last series rather than blanking.
   storage.fb_snapshot_n = (storage.fb_snapshot_n or 0) + 1
   local history_window = nil
-  if cfg.history_items > 0 and storage.fb_snapshot_n % cfg.history_every == 0 then
-    local cursor = math.floor(storage.fb_snapshot_n / cfg.history_every) % #cfg.windows
-    history_window = cfg.windows[cursor + 1]
+  local history_surface = nil
+  if cfg.history_items ~= 0 and storage.fb_snapshot_n % cfg.history_every == 0 then
+    local burst = math.floor(storage.fb_snapshot_n / cfg.history_every)
+
+    local names = {}
+    for _, surface in pairs(game.surfaces) do names[#names + 1] = surface.name end
+    table.sort(names) -- deterministic across peers
+
+    -- Surface advances every burst, window only once the surfaces have all had
+    -- a turn. The other order leaves a surface waiting a whole window cycle -
+    -- eight bursts - before its graph is refreshed at all.
+    if #names > 0 then
+      history_surface = names[(burst % #names) + 1]
+      history_window = cfg.windows[(math.floor(burst / #names) % #cfg.windows) + 1]
+    end
   end
 
   -- Long windows ride a slower cadence; the sidecar keeps the last value it saw
   -- for each window, so a snapshot that omits them is not a gap.
-  local include_slow = storage.fb_snapshot_n % cfg.slow_every == 0
+  -- Offset by one so this never lands on a history burst. Both cadences are
+  -- multiples of five by default, so without the offset every slow refresh
+  -- coincided with a burst and the two costs added: 33 ms and 92 ms measured on
+  -- the same tick. Apart, neither is close to the 16.7 ms budget twice over.
+  local include_slow = storage.fb_snapshot_n % cfg.slow_every == 1
   local windows_now = {}
   for _, window in pairs(cfg.windows) do
     if include_slow or not SLOW_WINDOWS[window] then
@@ -328,7 +394,7 @@ local function snapshot()
   local sizes = {}
   local surface_names = {}
   local surfaces = {}
-  local history = history_window and {} or nil
+  local history = history_surface and {} or nil
 
   for _, surface in pairs(game.surfaces) do
     local item_stats = force.get_item_production_statistics(surface)
@@ -349,27 +415,62 @@ local function snapshot()
       logistics = read_logistics(force, surface.name),
     }
 
-    if history_window then
+    if history_window and surface.name == history_surface then
       -- The production screen puts a graph over each of its two panels, and has
       -- a tab for items and one for fluids, so all four combinations are sent.
       -- Production and consumption are ranked separately on purpose: an item can
       -- dominate consumption without ever being produced here, and ranking by
       -- production alone left exactly those items unplottable.
+      -- Every prototype moving in this window gets a line, not a chosen few.
+      -- history_items is only a ceiling, for a save big enough to need one.
       local function series_for(stats, flows)
         local base = flows[BASE_WINDOW] or flows[cfg.windows[1]]
+        local limit = cfg.history_items > 0 and cfg.history_items or nil
         local produced, consumed = {}, {}
-        for _, name in pairs(top_names(base.input, cfg.history_items)) do
+        for _, name in pairs(top_names(base.input, limit)) do
           produced[name] = read_series(stats, name, history_window, "input")
         end
-        for _, name in pairs(top_names(base.output, cfg.history_items)) do
+        for _, name in pairs(top_names(base.output, limit)) do
           consumed[name] = read_series(stats, name, history_window, "output")
         end
         return { produced = produced, consumed = consumed }
       end
 
+      -- The electric network window graphs consumption and production too, and
+      -- pole.electric_network_statistics is an ordinary LuaFlowStatistics, so
+      -- the same machinery works. Note the inversion: for electricity "output"
+      -- is what generators made and "input" is what machines drew.
+      --
+      -- Only networks actually moving power get series. A planet accumulates
+      -- stub networks - eight on nauvis, one of them real - and graphing the
+      -- dead ones costs the same as graphing the live one.
+      local power = {}
+      for _, net in pairs(surfaces[surface.name].power) do
+        if not net.no_stats and (net.produced_j > 0 or net.consumed_j > 0) then
+          local stats = storage.fb_poles[surface.name]
+          local entity = nil
+          for _, candidate in pairs(stats or {}) do
+            if candidate.valid and candidate.type == "electric-pole"
+               and candidate.electric_network_id == net.id then entity = candidate end
+          end
+          if entity then
+            local es = entity.electric_network_statistics
+            local produced, consumed = {}, {}
+            for name in pairs(es.output_counts) do
+              produced[name] = read_series(es, name, history_window, "output")
+            end
+            for name in pairs(es.input_counts) do
+              consumed[name] = read_series(es, name, history_window, "input")
+            end
+            power[tostring(net.id)] = { produced = produced, consumed = consumed }
+          end
+        end
+      end
+
       history[surface.name] = {
         items = series_for(item_stats, items),
         fluids = series_for(fluid_stats, fluids),
+        power = power,
       }
     end
   end
@@ -401,7 +502,7 @@ local function snapshot()
 
   local nauvis = game.surfaces["nauvis"]
 
-  if history_window then
+  if history_surface then
     sizes.history = write(HISTORY_FILE, {
       v = PROTOCOL_VERSION,
       t = tick,
