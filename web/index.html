@@ -68,6 +68,9 @@
   --series-3: #0A3BFF;
   --series-4: #00808F;
   --series-5: #8C9BFF;
+  --series-6: #7FF7FF;
+  --series-7: #4459B8;
+  --series-8: #B9B9B9;
 
   /* Power satisfaction is a semantic state, the one case the palette rules
      admit. Kept desaturated so it never competes with the cyan accent. */
@@ -77,6 +80,11 @@
 }
 
 * { box-sizing: border-box; }
+
+/* An author `display` rule outranks the UA's [hidden] { display: none }, so any
+   element given a display here — the panels, the filter row, the picker — would
+   ignore the attribute and show anyway. Settle it once, for everything. */
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
@@ -572,6 +580,111 @@ summary {
   gap: var(--s-2);
 }
 
+/* Production and Consumption sit side by side, as they do in game. Below 900px
+   they stack rather than squeeze a 600-wide plot into half a phone. */
+.panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: var(--s-2);
+  align-items: start;
+}
+
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+}
+
+/* The game's reset-filters button is red and appears in the panel header. It is
+   hidden until a filter is actually set, so it never suggests state that is not
+   there. */
+.reset {
+  appearance: none;
+  margin-left: auto;
+  background: transparent;
+  color: var(--critical);
+  border: 1px solid var(--critical);
+  border-radius: var(--r-md);
+  padding: 0 var(--s-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.reset:hover { background: var(--critical); color: #000000; }
+
+/* A "slot" is one row of the item list: click to filter the graph to it, click
+   again to drop it. Multi-select is additive, no modifier, as in game. */
+.slots .bar-row {
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  padding: 1px var(--s-1);
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.slots .bar-row:hover { background: var(--track); }
+.slots .bar-row.on { border-color: var(--primary); background: rgba(0, 229, 255, 0.08); }
+
+/* An item with no series behind it cannot be plotted, so it does not pretend to
+   be clickable. The mod sends the top ten each way; the rest are numbers only. */
+.slots .bar-row.no-series { cursor: default; }
+.slots .bar-row.no-series:hover { background: none; }
+.slots .bar-row.no-series .bar-name { opacity: 0.75; }
+
+/* The swatch doubles as the legend: it is the line's colour on the graph above,
+   and blank for rows that have no line. */
+.slot-key {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-sm);
+  flex: none;
+  border: 1px solid var(--border);
+}
+
+.bar-row.slot {
+  grid-template-columns: 10px minmax(0, 118px) 1fr auto;
+}
+
+/* Hover-to-highlight, added to the game in 2.0.7: the hovered line stays, the
+   others recede. Done with opacity so no line actually disappears. */
+.chart .line.dim { opacity: 0.15; }
+.chart .line.hot { stroke-width: 3; }
+
+.panel .chart-wrap { margin-bottom: var(--s-4); }
+
+.net-card + .net-card { margin-top: var(--s-4); }
+
+/* Satisfaction, and the game's own producer/consumer split, as a bar. */
+.meter {
+  height: 8px;
+  background: var(--track);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  margin: var(--s-2) 0;
+}
+.meter span { display: block; height: 100%; background: var(--primary); }
+.meter span.warning { background: var(--warning); }
+.meter span.critical { background: var(--critical); }
+
+.stat-row {
+  display: flex;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.stat-row b {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabs.sub { border-bottom: 0; margin-bottom: var(--s-3); }
+.tabs.sub .tab { padding: var(--s-2) var(--s-3); }
+
 footer {
   margin-top: var(--s-8);
   font-family: var(--mono);
@@ -606,62 +719,81 @@ footer {
 
   <div class="tiles" id="tiles"></div>
 
-  <div class="tabs" id="tabs" role="tablist"></div>
+  <!-- The game keeps these on three separate screens: P for production, a click
+       on a pole for the electric network, L for logistic networks. Here they are
+       tabs over one surface. -->
+  <div class="tabs" id="sections" role="tablist">
+    <button class="tab" role="tab" data-section="production" aria-selected="true">Production</button>
+    <button class="tab" role="tab" data-section="electricity" aria-selected="false">Electricity</button>
+    <button class="tab" role="tab" data-section="logistics" aria-selected="false">Logistics</button>
+  </div>
 
+  <div class="tabs sub" id="tabs" role="tablist"></div>
+
+  <!-- Timespan, then the Items/Fluids split. 2.0 puts the timespan row above
+       the tab row; 1.1 had them the other way round. -->
   <div class="filters">
-    <span class="label">Window</span>
+    <span class="label">Timespan</span>
     <span class="seg" id="windows"></span>
+    <span class="seg" id="kinds" hidden>
+      <button data-kind="items" aria-pressed="true">Items</button>
+      <button data-kind="fluids" aria-pressed="false">Fluids</button>
+    </span>
     <span class="meta" id="window-note"></span>
   </div>
 
-  <div class="stack">
-    <section class="card">
-      <h2>Production over time</h2>
-      <div class="hint" id="chart-hint">the game's own graph samples</div>
-      <div class="chart-wrap" id="chart-wrap">
-        <svg class="chart" id="chart" viewBox="0 0 600 210" role="img" aria-label="Production over time"></svg>
-        <div class="tip" id="tip" hidden></div>
+  <!-- Production: two panels, made on the left and used on the right, each with
+       its own graph over its own list — the shape of the in-game screen. -->
+  <div class="panels" id="panel-production">
+    <section class="card panel">
+      <div class="panel-head">
+        <h2>Production</h2>
+        <button class="reset" data-reset="produced" hidden>Reset filters</button>
       </div>
-      <div class="legend" id="chart-legend"></div>
+      <div class="hint window-hint">per minute</div>
+      <div class="chart-wrap">
+        <svg class="chart" id="chart-produced" viewBox="0 0 600 180" role="img" aria-label="Production over time"></svg>
+        <div class="tip" id="tip-produced" hidden></div>
+      </div>
+      <div class="bars slots" id="produced"></div>
       <details>
         <summary>Table view</summary>
-        <div class="scroll"><table id="chart-table"></table></div>
+        <div class="scroll"><table id="produced-table"></table></div>
       </details>
     </section>
 
-    <div class="grid2">
-      <section class="card">
-        <h2>Electricity</h2>
-        <div class="hint" id="power-hint">per electric network</div>
-        <div id="power"></div>
-      </section>
+    <section class="card panel">
+      <div class="panel-head">
+        <h2>Consumption</h2>
+        <button class="reset" data-reset="consumed" hidden>Reset filters</button>
+      </div>
+      <div class="hint window-hint">per minute</div>
+      <div class="chart-wrap">
+        <svg class="chart" id="chart-consumed" viewBox="0 0 600 180" role="img" aria-label="Consumption over time"></svg>
+        <div class="tip" id="tip-consumed" hidden></div>
+      </div>
+      <div class="bars slots" id="consumed"></div>
+      <details>
+        <summary>Table view</summary>
+        <div class="scroll"><table id="consumed-table"></table></div>
+      </details>
+    </section>
+  </div>
 
-      <section class="card">
-        <h2>Items produced</h2>
-        <div class="hint window-hint">per minute</div>
-        <div class="bars" id="produced"></div>
-        <details>
-          <summary>Table view</summary>
-          <div class="scroll"><table id="produced-table"></table></div>
-        </details>
-      </section>
+  <div id="panel-electricity" hidden>
+    <section class="card">
+      <h2>Electric networks</h2>
+      <div class="hint" id="power-hint">per electric network</div>
+      <div id="power"></div>
+    </section>
+  </div>
 
-      <section class="card">
-        <h2>Items consumed</h2>
-        <div class="hint window-hint">per minute</div>
-        <div class="bars" id="consumed"></div>
-        <details>
-          <summary>Table view</summary>
-          <div class="scroll"><table id="consumed-table"></table></div>
-        </details>
-      </section>
-
-      <section class="card">
-        <h2>Fluids produced</h2>
-        <div class="hint window-hint">per minute</div>
-        <div class="bars" id="fluids"></div>
-      </section>
-    </div>
+  <div id="panel-logistics" hidden>
+    <section class="card">
+      <h2>Logistic networks</h2>
+      <div class="hint" id="logistics-hint">per network on this surface</div>
+      <div id="logistics"></div>
+    </section>
   </div>
 
   <footer id="foot">—</footer>
@@ -671,7 +803,7 @@ footer {
 'use strict';
 
 const TOP_N = 12;
-const CHART_SERIES = 5;
+const CHART_SERIES = 8;   // as many lines as the palette can keep apart
 
 // How much wall-clock each statistics window covers. Each window holds 300
 // samples spread across this span.
@@ -688,6 +820,17 @@ const TOTALS_WINDOW = 'all';
 let snapshot = null;
 let surface = null;
 let selectedWindow = null;
+// Which of the three screens is showing, and - on the production screen - items
+// or fluids. Both are view state; neither survives a change of server.
+let section = 'production';
+let kind = 'items';
+// Per panel, the items whose lines the graph is filtered to. Empty means all,
+// which is what the game shows until you click a slot.
+const selected = { produced: new Set(), consumed: new Set() };
+// The slot being hovered, which highlights its line without hiding the others.
+let hovered = null;
+let hoverPanel = null;
+
 // Liveness is measured on the tick, not on frame arrival — see updateStatus.
 let lastTick = null;
 let lastProgressAt = 0;
@@ -737,8 +880,16 @@ function tile(label, value, sub) {
   </div>`;
 }
 
-/** Ranked horizontal bars. One series per chart, so the title is the legend. */
-function renderBars(el, entries, format, alt) {
+/**
+ * One row of a panel's item list — the game calls these slots, and clicking one
+ * filters the graph above to it. A row is only clickable when the mod actually
+ * sent a series for that item: it ships the top ten each way, and a row with no
+ * line behind it would be a button that does nothing.
+ *
+ * The colour key on the left is the row's line on the graph, so the list doubles
+ * as the legend rather than needing a separate one.
+ */
+function renderSlots(el, entries, format, panel, slotOf, selected) {
   if (!entries.length) {
     el.innerHTML = '<div class="empty">Nothing recorded in this window.</div>';
     return;
@@ -746,9 +897,20 @@ function renderBars(el, entries, format, alt) {
   const max = entries[0][1];
   el.innerHTML = entries.map(([name, value]) => {
     const pct = max > 0 ? Math.max(1.5, (value / max) * 100) : 0;
-    return `<div class="bar-row" title="${pretty(name)}: ${format(value)}">
+    const slot = slotOf.get(name);
+    const plottable = slot !== undefined;
+    const on = selected.has(name);
+    const key = plottable
+      ? `<span class="slot-key" style="background:var(--series-${slot + 1});border-color:var(--series-${slot + 1})"></span>`
+      : '<span class="slot-key"></span>';
+    const title = plottable
+      ? `${pretty(name)}: ${format(value)} — click to filter the graph`
+      : `${pretty(name)}: ${format(value)} — no graph series for this item`;
+    return `<div class="bar-row slot${on ? ' on' : ''}${plottable ? '' : ' no-series'}"
+      data-item="${name}" data-panel="${panel}" title="${title}">
+      ${key}
       <span class="bar-name">${pretty(name)}</span>
-      <span class="bar-track"><span class="bar-fill${alt ? ' alt' : ''}" style="width:${pct}%"></span></span>
+      <span class="bar-track"><span class="bar-fill${panel === 'consumed' ? ' alt' : ''}" style="width:${pct}%"></span></span>
       <span class="bar-value">${format(value)}</span>
     </div>`;
   }).join('');
@@ -882,24 +1044,31 @@ function assignSlots(surfaceName, names) {
   return out;
 }
 
-/** Line chart over the game's own 300 graph samples for the selected window. */
-function renderChart(series, window, emptyMessage) {
-  const svg = document.getElementById('chart');
-  const legend = document.getElementById('chart-legend');
-  const names = Object.keys(series).slice(0, CHART_SERIES);
+/**
+ * One panel's graph, over the game's own 300 samples for the selected window.
+ *
+ * `selected` empty means draw everything, which is what the game does until you
+ * click a slot. A non-empty selection draws only those items and lets the y axis
+ * rescale to them — the point of the feature is that one item's shape is
+ * unreadable at the scale of the whole factory.
+ *
+ * `hovered` dims the other lines rather than removing them, which is the
+ * separate hover behaviour the game gained in 2.0.7.
+ */
+function renderChart(panel, series, window, slotOf, selected, emptyMessage) {
+  const svg = document.getElementById(`chart-${panel}`);
+  const all = Object.keys(series);
+  const names = (selected.size ? all.filter((n) => selected.has(n)) : all).slice(0, CHART_SERIES);
 
   if (!names.length) {
     // Collapse rather than leave the plot's height as dead space.
     svg.innerHTML = '';
-    svg.classList.add("is-empty");
-    legend.innerHTML = `<div class="empty">${emptyMessage
-      || 'No graph samples yet — history is sent every few seconds.'}</div>`;
-    document.getElementById('chart-table').innerHTML = '';
-    return;
+    svg.classList.add('is-empty');
+    return emptyMessage || (all.length ? 'Nothing selected.' : 'No graph samples yet — history is sent every few seconds.');
   }
-  svg.classList.remove("is-empty");
+  svg.classList.remove('is-empty');
 
-  const W = 600, H = 210, L = 46, R = 8, T = 10, B = 20;
+  const W = 600, H = 180, L = 46, R = 8, T = 10, B = 20;
   const points = Math.max(...names.map((n) => series[n].length));
   const max = Math.max(...names.flatMap((n) => series[n]), 1);
   // Round the top of the scale up to something readable.
@@ -916,15 +1085,15 @@ function renderChart(series, window, emptyMessage) {
       <text class="tick-label" x="${L - 6}" y="${yy + 3}" text-anchor="end">${axisLabel(value)}</text>`;
   }).join('');
 
-  const slots = assignSlots(surface, names);
-
-  const lines = names.map((name, i) => {
+  const lines = names.map((name) => {
     const values = series[name];
+    const slot = slotOf.get(name) ?? 0;
     const d = values.map((v, idx) => `${idx === 0 ? 'M' : 'L'}${x(idx).toFixed(1)},${y(v).toFixed(1)}`).join('');
-    return `<path class="line" d="${d}" stroke="var(--series-${slots[i] + 1})" vector-effect="non-scaling-stroke"/>`;
+    const state = hovered && hovered !== name ? ' dim' : (hovered === name ? ' hot' : '');
+    return `<path class="line${state}" d="${d}" stroke="var(--series-${slot + 1})" vector-effect="non-scaling-stroke"/>`;
   }).join('');
 
-  const cross = hoverIndex === null ? '' :
+  const cross = hoverIndex === null || hoverPanel !== panel ? '' :
     `<line class="crosshair" x1="${x(hoverIndex)}" y1="${T}" x2="${x(hoverIndex)}" y2="${H - B}"/>`;
 
   svg.innerHTML = `${gridlines}
@@ -933,43 +1102,27 @@ function renderChart(series, window, emptyMessage) {
     <text class="tick-label" x="${L}" y="${H - 6}">−${WINDOW_SPAN[window] || window}</text>
     <text class="tick-label" x="${W - R}" y="${H - 6}" text-anchor="end">now</text>`;
 
-  // Identity is never colour-alone: every series is named here, which also
-  // provides the relief the palette's near-neighbour hues require.
-  legend.innerHTML = names.map((name, i) =>
-    `<span class="legend-item"><span class="swatch" style="background:var(--series-${slots[i] + 1})"></span>${pretty(name)}</span>`
-  ).join('');
-
-  document.getElementById('chart-table').innerHTML =
-    `<thead><tr><th>Item</th><th class="num">Now</th><th class="num">Peak</th><th class="num">Mean</th></tr></thead><tbody>` +
-    names.map((n) => {
-      const v = series[n];
-      const mean = v.reduce((a, b) => a + b, 0) / (v.length || 1);
-      return `<tr><td>${pretty(n)}</td><td class="num">${rate(v[v.length - 1] ?? 0)}</td>` +
-             `<td class="num">${rate(Math.max(...v))}</td><td class="num">${rate(mean)}</td></tr>`;
-    }).join('') + '</tbody>';
-
   svg.dataset.points = String(points);
   svg.dataset.names = JSON.stringify(names);
-  svg.dataset.slots = JSON.stringify(slots);
+  return null;
 }
 
-function renderTip(series, window) {
-  const tip = document.getElementById('tip');
-  const svg = document.getElementById('chart');
+function renderTip(panel, series, window, slotOf) {
+  const tip = document.getElementById(`tip-${panel}`);
+  const svg = document.getElementById(`chart-${panel}`);
   const names = JSON.parse(svg.dataset.names || '[]');
-  const slots = JSON.parse(svg.dataset.slots || '[]');
-  if (hoverIndex === null || !names.length) { tip.hidden = true; return; }
+  if (hoverIndex === null || hoverPanel !== panel || !names.length) { tip.hidden = true; return; }
 
   const points = Number(svg.dataset.points || 1);
   const ago = points - 1 - hoverIndex;
   tip.hidden = false;
   tip.innerHTML =
     `<div class="when">${ago === 0 ? 'now' : `${((ago / (points - 1)) * 100).toFixed(0)}% of ${WINDOW_SPAN[window] || window} ago`}</div>` +
-    names.map((n, i) =>
-      `<div class="row"><span class="swatch" style="background:var(--series-${slots[i] + 1})"></span>${pretty(n)}<span class="v">${rate(series[n][hoverIndex] ?? 0)}</span></div>`
+    names.map((n) =>
+      `<div class="row"><span class="swatch" style="background:var(--series-${(slotOf.get(n) ?? 0) + 1})"></span>${pretty(n)}<span class="v">${rate(series[n][hoverIndex] ?? 0)}</span></div>`
     ).join('');
 
-  const wrap = document.getElementById('chart-wrap');
+  const wrap = svg.parentElement;
   const frac = hoverIndex / Math.max(1, points - 1);
   const left = 46 / 600 * wrap.clientWidth + frac * ((600 - 46 - 8) / 600) * wrap.clientWidth;
   tip.style.left = Math.min(wrap.clientWidth - tip.offsetWidth - 4, left + 10) + 'px';
@@ -1027,23 +1180,76 @@ function renderIdentity(meta) {
   document.getElementById('mods').replaceChildren(...chips);
 }
 
+/** Bots and cells for every logistic network on this surface. */
+function renderLogistics(el, networks) {
+  if (!networks.length) {
+    el.innerHTML = '<div class="empty">No logistic network on this surface.</div>';
+    return;
+  }
+  // The game identifies a network by its cell count in the L screen, so the
+  // largest reads as the main one.
+  const sorted = networks.slice().sort((a, b) => b.cells - a.cells);
+
+  el.innerHTML = sorted.map((net, i) => {
+    // "Available" and "Total" are the game's words. It never says "idle" about
+    // a robot - the only Idle string in the locale belongs to spidertron.
+    const busy = (all, avail) => (all > 0 ? ((all - avail) / all) * 100 : 0);
+    const bar = (all, avail) => {
+      const pct = busy(all, avail);
+      const cls = pct >= 95 ? 'critical' : pct >= 80 ? 'warning' : '';
+      return `<div class="meter"><span class="${cls}" style="width:${pct.toFixed(1)}%"></span></div>`;
+    };
+    return `<div class="net-card">
+      <div class="net-head">
+        <span class="net-title">Network ${i + 1}</span>
+        <span class="net-nums">${count(net.cells)} cells</span>
+      </div>
+      <div class="bar-group">Logistic robots</div>
+      ${bar(net.bots_all, net.bots_idle)}
+      <div class="stat-row">
+        <span><b>${count(net.bots_all - net.bots_idle)}</b> working</span>
+        <span><b>${count(net.bots_idle)}</b> available</span>
+        <span><b>${count(net.bots_all)}</b> total</span>
+      </div>
+      <div class="bar-group">Construction robots</div>
+      ${bar(net.construction_all, net.construction_idle)}
+      <div class="stat-row">
+        <span><b>${count(net.construction_all - net.construction_idle)}</b> working</span>
+        <span><b>${count(net.construction_idle)}</b> available</span>
+        <span><b>${count(net.construction_all)}</b> total</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 function render() {
   if (!snapshot) return;
   const names = snapshot.meta.surfaceNames || Object.keys(snapshot.surfaces);
   if (!surface || !snapshot.surfaces[surface]) surface = names[0];
 
-  // Tabs
-  document.getElementById('tabs').innerHTML = names.map((name) => {
-    const s = snapshot.surfaces[name];
-    const nets = s ? s.power.filter((n) => n.producedW > 0).length : 0;
-    return `<button class="tab" role="tab" data-surface="${name}"
-      aria-selected="${name === surface}">${pretty(name)}${nets ? `<span class="count">${nets}⚡</span>` : ''}</button>`;
-  }).join('');
-
   const s = snapshot.surfaces[surface];
   const m = snapshot.meta;
 
   renderIdentity(m);
+
+  // Surface tabs
+  document.getElementById('tabs').innerHTML = names.map((name) => {
+    const surf = snapshot.surfaces[name];
+    const nets = surf ? surf.power.filter((n) => n.producedW > 0).length : 0;
+    return `<button class="tab" role="tab" data-surface="${name}"
+      aria-selected="${name === surface}">${pretty(name)}${nets ? `<span class="count">${nets}⚡</span>` : ''}</button>`;
+  }).join('');
+
+  for (const tab of document.querySelectorAll('#sections .tab')) {
+    tab.setAttribute('aria-selected', String(tab.dataset.section === section));
+  }
+  document.getElementById('panel-production').hidden = section !== 'production';
+  document.getElementById('panel-electricity').hidden = section !== 'electricity';
+  document.getElementById('panel-logistics').hidden = section !== 'logistics';
+  // Items/Fluids only splits the production screen; the other two have no such
+  // division, and a timespan means nothing to a live robot count.
+  document.getElementById('kinds').hidden = section !== 'production';
+  document.getElementById('windows').parentElement.hidden = section === 'logistics';
 
   // Totals across every network on this surface.
   const produced = s ? s.power.reduce((a, n) => a + n.producedW, 0) : 0;
@@ -1051,11 +1257,15 @@ function render() {
   const sat = produced > 0 ? Math.min(100, (consumed / produced) * 100) : 0;
   const research = m.research;
 
-  // Which statistics window the rates and the chart are read from.
+  // Which statistics window the rates and the graphs are read from.
   const windows = (m.windows && m.windows.length) ? m.windows : [m.baseWindow || '1m'];
   if (!selectedWindow || !windows.includes(selectedWindow)) selectedWindow = m.baseWindow || windows[0];
   document.getElementById('windows').innerHTML = windows.map((w) =>
     `<button data-window="${w}" aria-pressed="${w === selectedWindow}">${w}</button>`).join('');
+  for (const button of document.querySelectorAll('#kinds button')) {
+    button.setAttribute('aria-pressed', String(button.dataset.kind === kind));
+  }
+
   const isTotals = selectedWindow === TOTALS_WINDOW;
   const span = WINDOW_SPAN[selectedWindow] || selectedWindow;
   const fmt = isTotals ? count : rate;
@@ -1067,8 +1277,7 @@ function render() {
     hint.textContent = isTotals ? 'total ever made' : `per minute, averaged over ${span}`;
   }
 
-  const items = (s && s.items[selectedWindow]) || { produced: {}, consumed: {} };
-  const fluids = (s && s.fluids[selectedWindow]) || { produced: {}, consumed: {} };
+  const flows = (s && s[kind === 'fluids' ? 'fluids' : 'items'][selectedWindow]) || { produced: {}, consumed: {} };
 
   // The game exposes no UPS of its own; the sidecar derives it from how far the
   // tick advances per second of wall clock.
@@ -1100,39 +1309,76 @@ function render() {
          (m.players || []).map((p) => p.name).join(', ') || 'nobody connected'),
   ].join('');
 
-  document.getElementById('power-hint').textContent =
-    s && s.power.length ? `${s.power.length} network(s) on ${pretty(surface)} · 1m window` : 'per electric network';
-  renderPower(document.getElementById('power'), s ? s.power : []);
+  if (section === 'electricity') {
+    document.getElementById('power-hint').textContent =
+      s && s.power.length ? `${s.power.length} network(s) on ${pretty(surface)} · 1m window` : 'per electric network';
+    renderPower(document.getElementById('power'), s ? s.power : []);
+  }
 
-  const prod = topEntries(items.produced, TOP_N);
-  const cons = topEntries(items.consumed, TOP_N);
-  const unit = isTotals ? 'total' : 'per minute';
-  renderBars(document.getElementById('produced'), prod, fmt, false);
-  renderBars(document.getElementById('consumed'), cons, fmt, true);
-  renderTable(document.getElementById('produced-table'), prod, unit, fmt);
-  renderTable(document.getElementById('consumed-table'), cons, unit, fmt);
-  renderBars(document.getElementById('fluids'), topEntries(fluids.produced, 8), fmt, false);
-
-  const series = isTotals ? {} : ((snapshot.history || {})[surface] || {})[selectedWindow] || {};
-  document.getElementById('chart-hint').textContent = isTotals
-    ? `${pretty(surface)} · cumulative totals have no graph; pick a window for the shape over time`
-    : `${pretty(surface)} · the game's own 300 graph samples across ${span}`;
-  renderChart(series, selectedWindow,
-    isTotals ? 'The game keeps graph samples per window, not for the all-time total.' : null);
-  renderTip(series, selectedWindow);
+  if (section === 'logistics') {
+    const nets = s ? s.logistics : [];
+    document.getElementById('logistics-hint').textContent = nets.length
+      ? `${nets.length} network(s) on ${pretty(surface)} · current state, not a window`
+      : 'per network on this surface';
+    renderLogistics(document.getElementById('logistics'), nets);
+  }
 
   document.getElementById('clock').textContent =
     `tick ${snapshot.tick.toLocaleString()}` + (m.paused ? ' · paused' : '') +
     (m.speed && m.speed !== 1 ? ` · ${m.speed}× speed` : '');
   document.getElementById('foot').textContent =
     `mod ${m.modVersion} · evolution ${(m.evolution || 0).toFixed(1)}% · ${names.length} surfaces`;
+
+  if (section !== 'production') return;
+
+  // The graph series for this surface, window and kind. "all" is a cumulative
+  // count rather than a sampled window, so the game hides the graphs there too.
+  const bucket = ((snapshot.history || {})[surface] || {})[selectedWindow] || {};
+  const panels = bucket[kind === 'fluids' ? 'fluids' : 'items'] || { produced: {}, consumed: {} };
+
+  for (const panel of ['produced', 'consumed']) {
+    const series = isTotals ? {} : (panels[panel] || {});
+    const entries = topEntries(flows[panel], TOP_N);
+    // Colour by the series present, so a slot's key matches its line.
+    const slotOf = new Map();
+    assignSlots(`${surface}|${kind}|${panel}`, Object.keys(series)).forEach((slot, i) => {
+      slotOf.set(Object.keys(series)[i], slot);
+    });
+
+    // A selection can outlive the data it names — switching window or kind, or
+    // an item dropping out of the top ten. Drop what is no longer plottable so
+    // the reset button never appears for a filter that does nothing.
+    for (const name of [...selected[panel]]) {
+      if (!(name in series)) selected[panel].delete(name);
+    }
+
+    const empty = renderChart(panel, series, selectedWindow, slotOf, selected[panel],
+      isTotals ? 'Cumulative totals have no graph; pick a timespan for the shape over time.' : null);
+    renderTip(panel, series, selectedWindow, slotOf);
+    renderSlots(document.getElementById(panel), entries, fmt, panel, slotOf, selected[panel]);
+    renderTable(document.getElementById(`${panel}-table`), entries,
+      isTotals ? 'total' : 'per minute', fmt);
+
+    document.querySelector(`.reset[data-reset="${panel}"]`).hidden = selected[panel].size === 0;
+
+  }
 }
+
+document.getElementById('sections').addEventListener('click', (event) => {
+  const tab = event.target.closest('.tab');
+  if (!tab) return;
+  section = tab.dataset.section;
+  hoverIndex = null;
+  hovered = null;
+  render();
+});
 
 document.getElementById('tabs').addEventListener('click', (event) => {
   const tab = event.target.closest('.tab');
   if (!tab) return;
   surface = tab.dataset.surface;
   hoverIndex = null;
+  hovered = null;
   render();
 });
 
@@ -1144,24 +1390,82 @@ document.getElementById('windows').addEventListener('click', (event) => {
   render();
 });
 
-// Crosshair: the hit target is the whole plot, not the 2px line.
-const chart = document.getElementById('chart');
-chart.addEventListener('mousemove', (event) => {
-  const box = chart.getBoundingClientRect();
-  const points = Number(chart.dataset.points || 0);
-  if (!points) return;
-  const L = 46 / 600 * box.width;
-  const plot = (600 - 46 - 8) / 600 * box.width;
-  const frac = (event.clientX - box.left - L) / plot;
-  const next = Math.round(Math.min(1, Math.max(0, frac)) * (points - 1));
-  if (next === hoverIndex) return;
-  hoverIndex = next;
-  render();
-});
-chart.addEventListener('mouseleave', () => {
+document.getElementById('kinds').addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-kind]');
+  if (!button) return;
+  kind = button.dataset.kind;
+  // Items and fluids are different sets of names, so a filter cannot carry over.
+  selected.produced.clear();
+  selected.consumed.clear();
   hoverIndex = null;
+  hovered = null;
   render();
 });
+
+// Clicking a slot filters the graph to it; clicking again drops it. Additive,
+// no modifier, which is how the game does it. Rows with no series behind them
+// are inert rather than silently doing nothing.
+for (const panel of ['produced', 'consumed']) {
+  const list = document.getElementById(panel);
+
+  list.addEventListener('click', (event) => {
+    const row = event.target.closest('.bar-row');
+    if (!row || row.classList.contains('no-series')) return;
+    const item = row.dataset.item;
+    if (selected[panel].has(item)) selected[panel].delete(item);
+    else selected[panel].add(item);
+    render();
+  });
+
+  // Hover highlights the line without removing the others - the behaviour the
+  // game added in 2.0.7, and separate from clicking.
+  list.addEventListener('mouseover', (event) => {
+    const row = event.target.closest('.bar-row');
+    if (!row || row.classList.contains('no-series')) return;
+    if (hovered === row.dataset.item) return;
+    hovered = row.dataset.item;
+    render();
+  });
+
+  list.addEventListener('mouseleave', () => {
+    if (hovered === null) return;
+    hovered = null;
+    render();
+  });
+}
+
+for (const button of document.querySelectorAll('.reset')) {
+  button.addEventListener('click', () => {
+    selected[button.dataset.reset].clear();
+    render();
+  });
+}
+
+// Crosshair: the hit target is the whole plot, not the 2px line.
+for (const panel of ['produced', 'consumed']) {
+  const chart = document.getElementById(`chart-${panel}`);
+
+  chart.addEventListener('mousemove', (event) => {
+    const box = chart.getBoundingClientRect();
+    const points = Number(chart.dataset.points || 0);
+    if (!points) return;
+    const L = 46 / 600 * box.width;
+    const plot = (600 - 46 - 8) / 600 * box.width;
+    const frac = (event.clientX - box.left - L) / plot;
+    const next = Math.round(Math.min(1, Math.max(0, frac)) * (points - 1));
+    if (next === hoverIndex && hoverPanel === panel) return;
+    hoverIndex = next;
+    hoverPanel = panel;
+    render();
+  });
+
+  chart.addEventListener('mouseleave', () => {
+    if (hoverIndex === null) return;
+    hoverIndex = null;
+    hoverPanel = null;
+    render();
+  });
+}
 
 // ---- server target --------------------------------------------------------
 
@@ -1280,9 +1584,16 @@ function renderTargets() {
 // game that was being watched, and a stale panel next to a new server misleads.
 function clearView() {
   const ids = ['tiles', 'tabs', 'windows', 'produced', 'produced-table', 'consumed',
-    'consumed-table', 'fluids', 'power', 'chart', 'chart-legend', 'chart-table'];
+    'consumed-table', 'power', 'logistics', 'chart-produced', 'chart-consumed'];
   for (const id of ids) document.getElementById(id).innerHTML = '';
-  document.getElementById('tip').hidden = true;
+  for (const panel of ['produced', 'consumed']) {
+    document.getElementById(`tip-${panel}`).hidden = true;
+    // A filter names items on the server being left; it means nothing on the next.
+    selected[panel].clear();
+    document.querySelector(`.reset[data-reset="${panel}"]`).hidden = true;
+  }
+  hovered = null;
+  hoverPanel = null;
   document.getElementById('clock').textContent = '—';
   // The identity belongs to the server being left, heading and title included.
   document.getElementById('title').textContent = 'Factorio Broadcast';

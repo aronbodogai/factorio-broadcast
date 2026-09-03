@@ -42,7 +42,7 @@ data:extend({
     type = "int-setting",
     name = "fb-history-items",
     setting_type = "runtime-global",
-    default_value = 5,
+    default_value = 10,
     minimum_value = 0,
     maximum_value = 20,
     order = "f",

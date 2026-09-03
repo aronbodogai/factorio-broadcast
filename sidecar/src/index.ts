@@ -48,13 +48,15 @@ const asArray = <T,>(v: unknown): T[] => {
   return [];
 };
 
+type SeriesPanels = { produced: Record<string, number[]>; consumed: Record<string, number[]> };
+
 type Snapshot = {
   tick: number;
   receivedAt: number;
   ups: number | null;
   meta: Record<string, unknown>;
   surfaces: Record<string, unknown>;
-  history: Record<string, Record<string, Record<string, number[]>>>;
+  history: Record<string, Record<string, { items: SeriesPanels; fluids: SeriesPanels }>>;
 };
 
 let latest: Snapshot | null = null;
@@ -69,7 +71,7 @@ const stats = {
 
 // Graph series arrive on their own slower cadence, one window per burst, so they
 // are kept here and merged into every snapshot rather than expiring with one.
-const history: Record<string, Record<string, Record<string, number[]>>> = {};
+const history: Record<string, Record<string, { items: SeriesPanels; fluids: SeriesPanels }>> = {};
 
 // Last value seen per surface per statistics window, so slow windows survive the
 // snapshots that omit them.
@@ -199,14 +201,36 @@ function applySnapshot(raw: any) {
   for (const res of clients) res.write(frame);
 }
 
+/** Index 0 is the most recent sample; reverse so charts read left to right. */
+function normaliseSeries(series: Record<string, number[]> | undefined) {
+  const out: Record<string, number[]> = {};
+  for (const [item, values] of Object.entries(series ?? {})) {
+    out[item] = asArray<number>(values).map(un).reverse();
+  }
+  return out;
+}
+
+const emptyPanels = () => ({ produced: {}, consumed: {} });
+
 function applyHistory(raw: any) {
   const window = String(raw.window);
   for (const [surface, series] of Object.entries((raw.surfaces ?? {}) as Record<string, any>)) {
-    const normalised: Record<string, number[]> = {};
-    for (const [item, values] of Object.entries(series as Record<string, number[]>)) {
-      // Index 0 is the most recent sample; reverse so charts read left to right.
-      normalised[item] = asArray<number>(values).map(un).reverse();
+    // Protocol 3 sent one flat map of production series per surface. The
+    // production screen wants a graph per panel and a tab for fluids, so
+    // protocol 4 sends items and fluids, each split into produced and consumed.
+    // Both shapes are accepted, so a sidecar upgraded ahead of the mod - or a
+    // save still running the old scenario script - keeps plotting.
+    const panels = (v: any) => (v ? { produced: normaliseSeries(v.produced), consumed: normaliseSeries(v.consumed) } : emptyPanels());
+
+    let normalised;
+    if (series && (series.items || series.fluids)) {
+      normalised = { items: panels(series.items), fluids: panels(series.fluids) };
+    } else if (series && (series.produced || series.consumed)) {
+      normalised = { items: panels(series), fluids: emptyPanels() };
+    } else {
+      normalised = { items: { produced: normaliseSeries(series), consumed: {} }, fluids: emptyPanels() };
     }
+
     history[surface] = history[surface] ?? {};
     history[surface][window] = normalised;
   }

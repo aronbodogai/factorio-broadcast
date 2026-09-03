@@ -18,12 +18,16 @@
     * no entity event subscriptions, for the same clobbering reason - electric
       networks are rediscovered on a timer instead.
 
-  Wire format (protocol 3)
+  Wire format (protocol 4)
   ------------------------
   Two JSON files in script-output, rewritten in place:
 
     broadcast.json          the whole snapshot, once per interval
     broadcast-history.json  the graph series, on a slower cadence
+
+  Protocol 4 splits the history file per surface into { produced, consumed }.
+  The in-game production screen draws a graph over each of its two panels, and
+  ranking series by production alone left heavily-consumed items unplottable.
 
   This used to push datagrams with helpers.send_udp. It does not any more:
   send_udp costs 8-31 ms PER CALL - a fixed cost, not proportional to payload -
@@ -46,7 +50,7 @@
 
 local M = {}
 
-local PROTOCOL_VERSION = 3
+local PROTOCOL_VERSION = 4
 
 local SNAPSHOT_FILE = "broadcast.json"
 local HISTORY_FILE = "broadcast-history.json"
@@ -98,7 +102,7 @@ local function config()
     windows = split_windows(c.windows or "5s,1m,10m,1h,10h,50h,250h,1000h"),
     -- Graph series are large, so they go out on their own slower cadence and
     -- cover one window per burst, rotating through the configured windows.
-    history_items = c.history_items or 5,
+    history_items = c.history_items or 10,
     history_every = c.history_every or 5,
     slow_every = c.slow_every or 30,
   }
@@ -153,13 +157,15 @@ end
 
 --- The 300 samples behind one line of an in-game statistics graph.
 --- Index 1 is the most recent sample.
-local function read_series(stats, name, window)
+--- category is "input" for what was produced, "output" for what was consumed.
+--- The in-game production screen graphs both, one per panel, so both are sent.
+local function read_series(stats, name, window, category)
   local precision = WINDOWS[window]
   local series = {}
   for sample = 1, SAMPLES_PER_WINDOW do
     series[sample] = q(stats.get_flow_count({
       name = name,
-      category = "input",
+      category = category,
       precision_index = precision,
       sample_index = sample,
     }))
@@ -311,7 +317,8 @@ local function snapshot()
   for _, surface in pairs(game.surfaces) do
     local item_stats = force.get_item_production_statistics(surface)
     local items, item_totals = read_flow_windows(item_stats, windows_now)
-    local fluids, fluid_totals = read_flow_windows(force.get_fluid_production_statistics(surface), windows_now)
+    local fluid_stats = force.get_fluid_production_statistics(surface)
+    local fluids, fluid_totals = read_flow_windows(fluid_stats, windows_now)
 
     surface_names[#surface_names + 1] = surface.name
     surfaces[surface.name] = {
@@ -327,15 +334,27 @@ local function snapshot()
     }
 
     if history_window then
-      local base = items[BASE_WINDOW] or items[cfg.windows[1]]
-      local names = top_names(base.input, cfg.history_items)
-      if #names > 0 then
-        local series = {}
-        for _, name in pairs(names) do
-          series[name] = read_series(item_stats, name, history_window)
+      -- The production screen puts a graph over each of its two panels, and has
+      -- a tab for items and one for fluids, so all four combinations are sent.
+      -- Production and consumption are ranked separately on purpose: an item can
+      -- dominate consumption without ever being produced here, and ranking by
+      -- production alone left exactly those items unplottable.
+      local function series_for(stats, flows)
+        local base = flows[BASE_WINDOW] or flows[cfg.windows[1]]
+        local produced, consumed = {}, {}
+        for _, name in pairs(top_names(base.input, cfg.history_items)) do
+          produced[name] = read_series(stats, name, history_window, "input")
         end
-        history[surface.name] = series
+        for _, name in pairs(top_names(base.output, cfg.history_items)) do
+          consumed[name] = read_series(stats, name, history_window, "output")
+        end
+        return { produced = produced, consumed = consumed }
       end
+
+      history[surface.name] = {
+        items = series_for(item_stats, items),
+        fluids = series_for(fluid_stats, fluids),
+      }
     end
   end
 
