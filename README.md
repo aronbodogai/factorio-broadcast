@@ -222,10 +222,103 @@ node scripts/udp-tap.js 41234 5                               # raw datagrams, u
 ```
 mod/          broadcast.lua is the implementation; control.lua wraps it as a mod
 sidecar/      Node 22 + TypeScript, no dependencies, no build step
+web/          index.html is the dashboard; servers.json names the sidecars it can reach
 scripts/      dev.sh (WSL driver), make-scenario.py (softmod build), rcon.js, udp-tap.js
+wrangler.jsonc  deploys web/ to Cloudflare as static assets, no Worker script
 dev/          gitignored: Windows-side scratch instance
 ~/fb/         in WSL: factorio/ (headless), node/, instance/ (save, mods, logs)
 ```
+
+---
+
+## Which sidecar the page talks to
+
+The dashboard is a static file. When the sidecar serves it the two are
+same-origin and nothing needs configuring. But it is also deployed to
+Cloudflare, where it has no API of its own, so the target is data rather than a
+hardcoded origin.
+
+The URL names the server:
+
+```
+https://factorio-dash.aroncreates.com/target/fb.example.com
+https://factorio-dash.aroncreates.com/target/fb.example.com:8099
+https://factorio-dash.aroncreates.com/target/fb.example.com/under-a-prefix
+```
+
+A bare host is assumed to be `https`. It has to be: the page is served over
+https, and a browser blocks an http subresource from an https page as mixed
+content, so an `http://192.168.x.x:8099` sidecar cannot be reached from the
+deployed page at all — see *Reaching a local sidecar* below.
+
+Resolution order, first match wins:
+
+| Source | Notes |
+|---|---|
+| `/target/<host>` | A shareable link to one server. Needs the SPA fallback, which `wrangler.jsonc` sets. |
+| `?api=<base-url>` | Same idea for a host that cannot route many paths to one page. |
+| `?server=<id>` | An id from `servers.json`. |
+| `localStorage` | The last pick, so a reload stays put. |
+| First entry of `servers.json` | Same-origin when the sidecar serves the page. |
+
+`web/servers.json` lists sidecars the page may talk to without a URL. With more
+than one entry a picker appears in the header; with one it stays hidden.
+
+```json
+[
+  { "id": "local", "label": "Local sidecar", "url": "" },
+  { "id": "nauvis", "label": "Main base", "url": "https://fb.example.com" }
+]
+```
+
+An empty `url` means same-origin. If the file is missing, the page falls back to
+same-origin.
+
+Switching servers closes the stream and clears every panel: ticks, surfaces and
+series colours all belong to the game being left. Cross-origin needs nothing on
+the sidecar — it already answers `Access-Control-Allow-Origin: *`, and SSE sends
+no preflight.
+
+One parsing quirk worth knowing: browsers collapse a doubled slash inside a
+path, so `/target/https://host` arrives as `https:/host`. The parser puts the
+slash back before reading the host.
+
+### Reaching a local sidecar
+
+The sidecar runs next to the game, on a private address, over plain http. The
+deployed page cannot reach that: mixed content blocks the request, and a visitor
+outside the LAN has no route to the address anyway. `http://127.0.0.1` is exempt
+from mixed-content blocking, but only serves the one machine running the game,
+and Chrome's Private Network Access rules want a preflight opt-in the sidecar
+does not send.
+
+So the sidecar goes behind a Cloudflare tunnel, which gives it a public
+hostname and real TLS without opening a port. Add an ingress rule to the
+existing tunnel's config:
+
+```yaml
+ingress:
+  - hostname: fb.example.com
+    service: http://127.0.0.1:8099
+  - service: http_status:404
+```
+
+Then `cloudflared tunnel route dns <tunnel> fb.example.com`, and the dashboard
+lives at `https://factorio-dash.aroncreates.com/target/fb.example.com`.
+
+Note what does *not* pass through Cloudflare: the tunnel carries the statistics
+straight from the sidecar to the browser. The deployed site is the page only.
+
+### Deploying the page
+
+```bash
+npx wrangler deploy
+```
+
+`wrangler.jsonc` uploads `web/` as Workers static assets and binds
+`factorio-dash.aroncreates.com`. There is no Worker script. The one setting that
+matters is `not_found_handling: "single-page-application"`, without which every
+`/target/...` URL would 404 instead of loading the page that reads it.
 
 ---
 

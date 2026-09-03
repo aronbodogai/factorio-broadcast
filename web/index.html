@@ -95,6 +95,22 @@
   .dot.stale { background: var(--warning); }
   .dot.down { background: var(--critical); }
 
+  /* Sidecar picker. Hidden unless servers.json lists more than one target. */
+  .target {
+    appearance: none;
+    background: var(--surface);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 3px 8px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .target:hover { color: var(--text-primary); }
+  /* A UA display rule on <select> outranks the plain hidden attribute. */
+  .target[hidden] { display: none; }
+
   .meta { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
   /* KPI row */
@@ -122,6 +138,9 @@
   }
   .tile .value { font-size: 25px; font-weight: 600; line-height: 1.15; letter-spacing: -0.02em; }
   .tile .sub { font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
+  .tile.wide { grid-column: 1 / -1; }
+  .tile code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+    background: var(--track); border-radius: 4px; padding: 1px 5px; word-break: break-all; }
 
   /* Surface tabs */
   .tabs {
@@ -315,6 +334,8 @@
   <header>
     <h1>Factorio Broadcast</h1>
     <span class="meta" id="clock">—</span>
+    <select class="target" id="server" aria-label="Server" hidden></select>
+    <span class="meta" id="target-note"></span>
     <span class="status"><span class="dot" id="dot"></span><span id="conn">connecting…</span></span>
   </header>
 
@@ -819,6 +840,174 @@ chart.addEventListener('mouseleave', () => {
   render();
 });
 
+// ---- server target --------------------------------------------------------
+
+// The page is not always served by the sidecar: on a static host it has no API
+// of its own, so the base URL cannot be assumed to be the page's own origin.
+// The target therefore comes from the URL, or from servers.json fetched next to
+// the page. An empty url means same-origin - what happens when the sidecar
+// serves this page itself, which is why that is also the fallback.
+const DEFAULT_TARGETS = [{ id: 'local', label: 'Local sidecar', url: '' }];
+
+let targets = DEFAULT_TARGETS;
+let target = DEFAULT_TARGETS[0];
+let stream = null;
+
+// A trailing slash would double up against the '/api/...' paths.
+const normaliseBase = (url) => String(url || '').replace(/\/+$/, '');
+
+const api = (path) => target.url + path;
+
+// /target/<host>, /target/<host:port>, /target/<host>/<base-path>, or a whole
+// URL. A bare host gets https: this page is served over https, so a plain http
+// sidecar would be blocked as mixed content long before it answered. Put the
+// sidecar behind a tunnel or a proxy that terminates TLS.
+function parsePathTarget() {
+  const match = location.pathname.match(/^\/target\/(.+)$/);
+  if (!match) return null;
+
+  let spec = decodeURIComponent(match[1]).replace(/\/+$/, '');
+  if (!spec) return null;
+
+  // Browsers collapse a doubled slash inside a path, so a scheme written into
+  // /target/ arrives as "http:/host". Put the slash back before parsing, or the
+  // host would come out as "http".
+  spec = spec.replace(/^(https?):\/+/i, '$1://');
+  if (!/^https?:\/\//i.test(spec)) spec = 'https://' + spec;
+
+  let url;
+  try {
+    url = new URL(spec);
+  } catch {
+    return null; // not a host at all; fall through to the normal resolution
+  }
+
+  // Keep any path, so a sidecar proxied under a prefix still works.
+  const suffix = url.pathname === '/' ? '' : url.pathname;
+  return { id: 'path', label: url.host + suffix, url: normaliseBase(url.origin + suffix) };
+}
+
+async function loadTargets() {
+  // The URL wins over everything: a link has to be able to name its server.
+  const fromPath = parsePathTarget();
+  if (fromPath) return [fromPath];
+
+  // ?api=<url> is the same idea without the path routing, for hosts that cannot
+  // serve one page from many paths.
+  const adhoc = new URLSearchParams(location.search).get('api');
+  if (adhoc) return [{ id: 'custom', label: adhoc, url: normaliseBase(adhoc) }];
+
+  let list;
+  try {
+    // Absolute: under /target/... a relative fetch would look one level down.
+    const res = await fetch('/servers.json', { cache: 'no-store' });
+    if (!res.ok) return DEFAULT_TARGETS;
+    // A single-page host answers 200 with index.html for a missing file, so
+    // the parse is as much of a check as the status is.
+    list = await res.json();
+  } catch {
+    return DEFAULT_TARGETS;
+  }
+
+  const clean = (Array.isArray(list) ? list : [])
+    .filter((s) => s && s.id)
+    .map((s) => ({ id: String(s.id), label: String(s.label || s.id), url: normaliseBase(s.url) }));
+  return clean.length ? clean : DEFAULT_TARGETS;
+}
+
+// ?server=<id> wins over the last choice, so a link can pin one server.
+function pickTarget() {
+  const wanted = new URLSearchParams(location.search).get('server') || remembered();
+  return targets.find((t) => t.id === wanted) || targets[0];
+}
+
+// Private-mode browsers throw on storage rather than returning null.
+function remembered() {
+  try { return localStorage.getItem('fb.server'); } catch { return null; }
+}
+
+function remember(id) {
+  try { localStorage.setItem('fb.server', id); } catch { /* not fatal */ }
+}
+
+function renderTargets() {
+  const select = document.getElementById('server');
+  select.hidden = targets.length < 2;
+  select.replaceChildren(...targets.map((t) => {
+    const option = document.createElement('option');
+    option.value = t.id;
+    option.textContent = t.label;
+    option.selected = t.id === target.id;
+    return option;
+  }));
+
+  // With one target there is no picker, but on a static host the reader still
+  // needs to know which server they are looking at.
+  const note = document.getElementById('target-note');
+  note.textContent = targets.length < 2 && target.url ? target.label : '';
+}
+
+// Nothing survives a switch: ticks, surfaces and colour slots all belong to the
+// game that was being watched, and a stale panel next to a new server misleads.
+function clearView() {
+  const ids = ['tiles', 'tabs', 'windows', 'produced', 'produced-table', 'consumed',
+    'consumed-table', 'fluids', 'power', 'chart', 'chart-legend', 'chart-table'];
+  for (const id of ids) document.getElementById(id).innerHTML = '';
+  document.getElementById('tip').hidden = true;
+  document.getElementById('clock').textContent = '—';
+  document.getElementById('window-note').textContent = '';
+  document.getElementById('foot').textContent = '—';
+}
+
+function selectTarget(id) {
+  const next = targets.find((t) => t.id === id);
+  if (!next || next.id === target.id) return;
+  target = next;
+  remember(target.id);
+
+  if (stream) stream.close();
+  stream = null;
+  snapshot = null;
+  surface = null;
+  selectedWindow = null;
+  lastAt = 0;
+  hoverIndex = null;
+  colourSlots.clear();
+  clearView();
+  setStatus('', 'connecting…');
+  connect();
+}
+
+document.getElementById('server').addEventListener('change', (event) => {
+  selectTarget(event.target.value);
+});
+
+// A statically hosted page has no API of its own, so the same-origin fallback is
+// a dead end until the URL names a sidecar. Say that, rather than spinning on
+// "reconnecting" forever. Built as nodes, never markup: the host comes out of
+// the address bar and must not be able to write HTML into the page.
+function showSetupHint() {
+  const tile = document.createElement('div');
+  tile.className = 'tile wide';
+
+  const label = document.createElement('div');
+  label.className = 'label';
+  label.textContent = 'No sidecar reachable';
+
+  const where = document.createElement('code');
+  where.textContent = (target.url || location.origin) + '/api/stream';
+  const how = document.createElement('code');
+  how.textContent = location.origin + '/target/<sidecar-host>';
+
+  const sub = document.createElement('div');
+  sub.className = 'sub';
+  sub.append('Nothing answered at ', where, '. Name a sidecar in the URL: ', how,
+    ' — it has to be reachable over https, so put it behind a tunnel rather than opening a port.');
+
+  tile.append(label, sub);
+  document.getElementById('tiles').replaceChildren(tile);
+}
+
 // ---- transport ------------------------------------------------------------
 
 function setStatus(cls, text) {
@@ -827,9 +1016,11 @@ function setStatus(cls, text) {
 }
 
 function connect() {
-  const source = new EventSource('/api/stream');
+  const source = new EventSource(api('/api/stream'));
+  stream = source;
 
   source.onmessage = (event) => {
+    if (stream !== source) return; // superseded by a target switch
     try {
       snapshot = JSON.parse(event.data);
       lastAt = Date.now();
@@ -839,12 +1030,19 @@ function connect() {
     }
   };
 
-  source.onopen = () => setStatus('live', 'live');
+  source.onopen = () => {
+    if (stream === source) setStatus('live', 'live');
+  };
 
   source.onerror = () => {
+    if (stream !== source) return;
     setStatus('down', 'reconnecting…');
+    // Never connected at all: the target is wrong, not merely down.
+    if (!snapshot) showSetupHint();
     source.close();
-    setTimeout(connect, 2000);
+    setTimeout(() => {
+      if (stream === source) connect();
+    }, 2000);
   };
 }
 
@@ -858,7 +1056,12 @@ setInterval(() => {
   else setStatus('live', 'live');
 }, 1000);
 
-connect();
+(async function boot() {
+  targets = await loadTargets();
+  target = pickTarget();
+  renderTargets();
+  connect();
+})();
 </script>
 </body>
 </html>

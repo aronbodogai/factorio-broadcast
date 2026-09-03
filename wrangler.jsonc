@@ -1,0 +1,22 @@
+{
+  // Static hosting for the dashboard only. There is no Worker script: the
+  // sidecar stays on the machine running the game and is reached over a tunnel,
+  // so nothing about the factory data passes through Cloudflare.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "factorio-dash",
+  "compatibility_date": "2026-09-03",
+
+  "assets": {
+    "directory": "./web",
+    // /target/<sidecar-host> is routing, not a file. Without this, every such
+    // URL 404s instead of loading the page that knows how to read it.
+    "not_found_handling": "single-page-application"
+  },
+
+  "routes": [
+    {
+      "pattern": "factorio-dash.aroncreates.com",
+      "custom_domain": true
+    }
+  ]
+}
