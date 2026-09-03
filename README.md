@@ -292,19 +292,36 @@ from mixed-content blocking, but only serves the one machine running the game,
 and Chrome's Private Network Access rules want a preflight opt-in the sidecar
 does not send.
 
-So the sidecar goes behind a Cloudflare tunnel, which gives it a public
-hostname and real TLS without opening a port. Add an ingress rule to the
-existing tunnel's config:
+So the sidecar goes behind a Cloudflare tunnel, which gives it a public hostname
+and real TLS without opening a port. The tunnel is `factorio-broadcast`
+(`46bf7456-dd14-455e-805b-dc4165a91271`), configured in
+`%USERPROFILE%\.cloudflared\factorio-broadcast.yml` — its own file rather than
+`config.yml`, which belongs to an unrelated tunnel:
 
 ```yaml
+tunnel: 46bf7456-dd14-455e-805b-dc4165a91271
+credentials-file: C:\Users\ideku\.cloudflared\46bf7456-dd14-455e-805b-dc4165a91271.json
+
 ingress:
-  - hostname: fb.example.com
+  - hostname: fb-api.aroncreates.com
     service: http://127.0.0.1:8099
   - service: http_status:404
 ```
 
-Then `cloudflared tunnel route dns <tunnel> fb.example.com`, and the dashboard
-lives at `https://factorio-dash.aroncreates.com/target/fb.example.com`.
+`cloudflared tunnel route dns factorio-broadcast fb-api.aroncreates.com` created
+the CNAME. To run it:
+
+```bash
+cloudflared tunnel --config "%USERPROFILE%\.cloudflared\factorio-broadcast.yml" run
+```
+
+The dashboard is then
+`https://factorio-dash.aroncreates.com/target/fb-api.aroncreates.com`.
+
+cloudflared runs on the Windows side while the sidecar runs in WSL. That works
+because `.wslconfig` sets `networkingMode=Mirrored`, so the two share a loopback
+and `http://127.0.0.1:8099` means the same socket on both sides. Under the
+default NAT networking it would need the WSL address instead.
 
 Note what does *not* pass through Cloudflare: the tunnel carries the statistics
 straight from the sidecar to the browser. The deployed site is the page only.
