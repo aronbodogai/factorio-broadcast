@@ -644,7 +644,17 @@ summary {
 }
 
 .bar-row.slot {
-  grid-template-columns: 10px minmax(0, 118px) 1fr auto;
+  grid-template-columns: 10px 20px minmax(0, 118px) 1fr auto;
+}
+
+/* Factorio's icons are 64px; 20 is the size the in-game list uses them at, and
+   pixelated keeps them crisp rather than smeared by the downscale. */
+.icon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  flex: none;
 }
 
 /* Hover-to-highlight, added to the game in 2.0.7: the hovered line stays, the
@@ -655,6 +665,31 @@ summary {
 .panel .chart-wrap { margin-bottom: var(--s-4); }
 
 .net-card + .net-card { margin-top: var(--s-4); }
+
+/* The L screen's item table: a grid of icons with a count badge, not a list. */
+.contents {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: var(--s-1);
+}
+.cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: var(--s-1);
+  background: var(--track);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  transition: border-color var(--dur) var(--ease);
+}
+.cell:hover { border-color: var(--border); }
+.cell-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
 
 /* Satisfaction, and the game's own producer/consumer split, as a bar. */
 .meter {
@@ -756,10 +791,6 @@ footer {
         <div class="tip" id="tip-produced" hidden></div>
       </div>
       <div class="bars slots" id="produced"></div>
-      <details>
-        <summary>Table view</summary>
-        <div class="scroll"><table id="produced-table"></table></div>
-      </details>
     </section>
 
     <section class="card panel">
@@ -773,10 +804,6 @@ footer {
         <div class="tip" id="tip-consumed" hidden></div>
       </div>
       <div class="bars slots" id="consumed"></div>
-      <details>
-        <summary>Table view</summary>
-        <div class="scroll"><table id="consumed-table"></table></div>
-      </details>
     </section>
   </div>
 
@@ -790,7 +817,10 @@ footer {
 
   <div id="panel-logistics" hidden>
     <section class="card">
-      <h2>Logistic networks</h2>
+      <div class="panel-head">
+        <h2>Logistic networks</h2>
+        <select class="target" id="network" aria-label="Logistic network" hidden></select>
+      </div>
       <div class="hint" id="logistics-hint">per network on this surface</div>
       <div id="logistics"></div>
     </section>
@@ -802,7 +832,9 @@ footer {
 <script>
 'use strict';
 
-const TOP_N = 12;
+// The list shows everything with a non-zero rate, as the game does. Only the
+// graph is bounded, and only because each line costs the game 300 API reads.
+const TOP_N = Infinity;
 const CHART_SERIES = 8;   // as many lines as the palette can keep apart
 
 // How much wall-clock each statistics window covers. Each window holds 300
@@ -824,12 +856,15 @@ let selectedWindow = null;
 // or fluids. Both are view state; neither survives a change of server.
 let section = 'production';
 let kind = 'items';
-// Per panel, the items whose lines the graph is filtered to. Empty means all,
-// which is what the game shows until you click a slot.
-const selected = { produced: new Set(), consumed: new Set() };
+// One selection, shared by both panels: picking iron plate is a question about
+// iron plate, and the answer is only half there if consumption keeps every other
+// line. The game filters per panel; this is a deliberate divergence.
+const selected = new Set();
 // The slot being hovered, which highlights its line without hiding the others.
 let hovered = null;
 let hoverPanel = null;
+// Which logistic network the L-screen equivalent is showing, by network_id.
+let logisticNetwork = null;
 
 // Liveness is measured on the tick, not on frame arrival — see updateStatus.
 let lastTick = null;
@@ -868,6 +903,20 @@ function axisLabel(v) {
 
 function pretty(name) {
   return name.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase());
+}
+
+/**
+ * The item's own icon, served by the sidecar out of a Factorio install — the
+ * dashboard ships none of Wube's artwork itself.
+ *
+ * A sidecar started without FB_ICONS_DIR answers 404 for all of them, and a full
+ * install still has a handful of prototypes whose icon file is named something
+ * else. Either way the <img> collapses and the row falls back to its name, which
+ * is why the name is always rendered too.
+ */
+function icon(name) {
+  return `<img class="icon" src="${target.url}/icons/${encodeURIComponent(name)}.png"
+    alt="" loading="lazy" onerror="this.remove()">`;
 }
 
 // ---- rendering ------------------------------------------------------------
@@ -909,18 +958,12 @@ function renderSlots(el, entries, format, panel, slotOf, selected) {
     return `<div class="bar-row slot${on ? ' on' : ''}${plottable ? '' : ' no-series'}"
       data-item="${name}" data-panel="${panel}" title="${title}">
       ${key}
+      ${icon(name)}
       <span class="bar-name">${pretty(name)}</span>
       <span class="bar-track"><span class="bar-fill${panel === 'consumed' ? ' alt' : ''}" style="width:${pct}%"></span></span>
       <span class="bar-value">${format(value)}</span>
     </div>`;
   }).join('');
-}
-
-function renderTable(el, entries, unit, format) {
-  if (!entries.length) { el.innerHTML = ''; return; }
-  el.innerHTML = `<thead><tr><th>Item</th><th class="num">${unit}</th></tr></thead><tbody>` +
-    entries.map(([n, v]) => `<tr><td>${pretty(n)}</td><td class="num">${(format || rate)(v)}</td></tr>`).join('') +
-    '</tbody>';
 }
 
 /**
@@ -1180,7 +1223,12 @@ function renderIdentity(meta) {
   document.getElementById('mods').replaceChildren(...chips);
 }
 
-/** Bots and cells for every logistic network on this surface. */
+/**
+ * One network's bots, cells and contents — the Items table of the in-game L
+ * screen. With more than one network on the surface the game gives you a list to
+ * pick from; here that is a dropdown, keyed on network_id so the choice survives
+ * the next snapshot.
+ */
 function renderLogistics(el, networks) {
   if (!networks.length) {
     el.innerHTML = '<div class="empty">No logistic network on this surface.</div>';
@@ -1190,7 +1238,20 @@ function renderLogistics(el, networks) {
   // largest reads as the main one.
   const sorted = networks.slice().sort((a, b) => b.cells - a.cells);
 
-  el.innerHTML = sorted.map((net, i) => {
+  const picker = document.getElementById('network');
+  picker.hidden = sorted.length < 2;
+  if (!sorted.some((n) => String(n.id) === logisticNetwork)) logisticNetwork = String(sorted[0].id);
+  picker.replaceChildren(...sorted.map((net) => {
+    const option = document.createElement('option');
+    option.value = String(net.id);
+    option.textContent = `Network ${net.id} · ${count(net.cells)} cells`;
+    option.selected = String(net.id) === logisticNetwork;
+    return option;
+  }));
+
+  const shown = sorted.filter((net) => String(net.id) === logisticNetwork);
+
+  el.innerHTML = shown.map((net) => {
     // "Available" and "Total" are the game's words. It never says "idle" about
     // a robot - the only Idle string in the locale belongs to spidertron.
     const busy = (all, avail) => (all > 0 ? ((all - avail) / all) * 100 : 0);
@@ -1201,7 +1262,7 @@ function renderLogistics(el, networks) {
     };
     return `<div class="net-card">
       <div class="net-head">
-        <span class="net-title">Network ${i + 1}</span>
+        <span class="net-title">Network ${net.id}</span>
         <span class="net-nums">${count(net.cells)} cells</span>
       </div>
       <div class="bar-group">Logistic robots</div>
@@ -1218,8 +1279,41 @@ function renderLogistics(el, networks) {
         <span><b>${count(net.construction_idle)}</b> available</span>
         <span><b>${count(net.construction_all)}</b> total</span>
       </div>
+      ${contentsGrid(net.contents)}
     </div>`;
   }).join('');
+}
+
+/**
+ * What the network is holding. The game shows this as a grid of item icons with
+ * counts, so this does the same rather than making a list of it. Counts are
+ * summed across quality tiers: the mod merges them, because a separate row per
+ * tier would double the grid for a distinction shown nowhere else here.
+ */
+function contentsGrid(contents) {
+  const entries = Object.entries(contents || {})
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1]);
+
+  if (!entries.length) {
+    return '<div class="bar-group">Contents</div><div class="empty">Network is empty.</div>';
+  }
+
+  return `<div class="bar-group">Contents · ${count(entries.length)} item types</div>
+    <div class="contents">` +
+    entries.map(([name, n]) =>
+      `<div class="cell" title="${pretty(name)}: ${count(n)}">
+        ${icon(name)}
+        <span class="cell-count">${abbrev(n)}</span>
+      </div>`).join('') +
+    '</div>';
+}
+
+/** 1.5k, 93k, 2.4M — the game's own badge style for stack counts. */
+function abbrev(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'k';
+  return String(Math.round(n));
 }
 
 function render() {
@@ -1348,18 +1442,16 @@ function render() {
     // A selection can outlive the data it names — switching window or kind, or
     // an item dropping out of the top ten. Drop what is no longer plottable so
     // the reset button never appears for a filter that does nothing.
-    for (const name of [...selected[panel]]) {
-      if (!(name in series)) selected[panel].delete(name);
+    for (const name of [...selected]) {
+      if (!(name in series)) selected.delete(name);
     }
 
-    const empty = renderChart(panel, series, selectedWindow, slotOf, selected[panel],
+    const empty = renderChart(panel, series, selectedWindow, slotOf, selected,
       isTotals ? 'Cumulative totals have no graph; pick a timespan for the shape over time.' : null);
     renderTip(panel, series, selectedWindow, slotOf);
-    renderSlots(document.getElementById(panel), entries, fmt, panel, slotOf, selected[panel]);
-    renderTable(document.getElementById(`${panel}-table`), entries,
-      isTotals ? 'total' : 'per minute', fmt);
+    renderSlots(document.getElementById(panel), entries, fmt, panel, slotOf, selected);
 
-    document.querySelector(`.reset[data-reset="${panel}"]`).hidden = selected[panel].size === 0;
+    document.querySelector(`.reset[data-reset="${panel}"]`).hidden = selected.size === 0;
 
   }
 }
@@ -1395,8 +1487,7 @@ document.getElementById('kinds').addEventListener('click', (event) => {
   if (!button) return;
   kind = button.dataset.kind;
   // Items and fluids are different sets of names, so a filter cannot carry over.
-  selected.produced.clear();
-  selected.consumed.clear();
+  selected.clear();
   hoverIndex = null;
   hovered = null;
   render();
@@ -1412,8 +1503,8 @@ for (const panel of ['produced', 'consumed']) {
     const row = event.target.closest('.bar-row');
     if (!row || row.classList.contains('no-series')) return;
     const item = row.dataset.item;
-    if (selected[panel].has(item)) selected[panel].delete(item);
-    else selected[panel].add(item);
+    if (selected.has(item)) selected.delete(item);
+    else selected.add(item);
     render();
   });
 
@@ -1434,9 +1525,14 @@ for (const panel of ['produced', 'consumed']) {
   });
 }
 
+document.getElementById('network').addEventListener('change', (event) => {
+  logisticNetwork = event.target.value;
+  render();
+});
+
 for (const button of document.querySelectorAll('.reset')) {
   button.addEventListener('click', () => {
-    selected[button.dataset.reset].clear();
+    selected.clear();
     render();
   });
 }
@@ -1583,13 +1679,13 @@ function renderTargets() {
 // Nothing survives a switch: ticks, surfaces and colour slots all belong to the
 // game that was being watched, and a stale panel next to a new server misleads.
 function clearView() {
-  const ids = ['tiles', 'tabs', 'windows', 'produced', 'produced-table', 'consumed',
-    'consumed-table', 'power', 'logistics', 'chart-produced', 'chart-consumed'];
+  const ids = ['tiles', 'tabs', 'windows', 'produced', 'consumed',
+    'power', 'logistics', 'chart-produced', 'chart-consumed'];
   for (const id of ids) document.getElementById(id).innerHTML = '';
   for (const panel of ['produced', 'consumed']) {
     document.getElementById(`tip-${panel}`).hidden = true;
     // A filter names items on the server being left; it means nothing on the next.
-    selected[panel].clear();
+    selected.clear();
     document.querySelector(`.reset[data-reset="${panel}"]`).hidden = true;
   }
   hovered = null;

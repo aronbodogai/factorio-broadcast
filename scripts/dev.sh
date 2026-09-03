@@ -31,6 +31,10 @@ RCON_PORT=27015
 RCON_PASSWORD="${FB_RCON_PASSWORD:-devpass}"
 
 WIN_SAVES="/mnt/c/Users/ideku/AppData/Roaming/Factorio/saves"
+
+# Item icons for the dashboard. The headless build ships no graphics at all, so
+# this points at the Windows Steam copy rather than $FB/factorio.
+ICONS="${FB_ICONS_DIR:-/mnt/f/SteamLibrary/steamapps/common/Factorio/data}"
 NODE="${FB_NODE:-$HOME/fb/node/bin/node}"
 
 # Two ways to ship the same logic. In "mod" mode the server runs the mod, and a
@@ -229,8 +233,8 @@ cmd_sidecar_start() {
   # The sidecar reads the server's name and description straight out of
   # server-settings.json: the game never exposes them to Lua, so the mod cannot
   # send them.
-  setsid bash -c 'export FB_SERVER_SETTINGS="$4"; echo $$ > "$1"; exec "$2" "$3"' _ \
-    "$SIDECAR_PID" "$NODE" "$REPO/sidecar/src/index.ts" "$SETTINGS" \
+  setsid bash -c 'export FB_SERVER_SETTINGS="$4" FB_ICONS_DIR="$5"; echo $$ > "$1"; exec "$2" "$3"' _ \
+    "$SIDECAR_PID" "$NODE" "$REPO/sidecar/src/index.ts" "$SETTINGS" "$ICONS" \
     </dev/null >"$SIDECAR_LOG" 2>&1 &
 
   for _ in $(seq 1 20); do [[ -s "$SIDECAR_PID" ]] && break; sleep 0.2; done

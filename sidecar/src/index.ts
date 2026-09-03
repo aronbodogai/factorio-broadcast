@@ -21,6 +21,56 @@ const HISTORY_FILE = path.join(OUTPUT_DIR, 'broadcast-history.json');
 // server_settings. So the dashboard gets them the only way anything outside the
 // game can: by reading the same file. Optional; unset simply means no name.
 const SETTINGS_FILE = process.env.FB_SERVER_SETTINGS ?? '';
+
+// Item icons come out of a Factorio install, which the sidecar serves from disk
+// rather than the dashboard bundling them. They are Wube's artwork: keeping them
+// on the machine that owns the game, instead of copying them into a repo and
+// onto a CDN, is both the smaller change and the more defensible one.
+//
+// Point this at the "data" directory of a FULL install. The headless build ships
+// no graphics at all, so on a WSL setup this is the Windows copy:
+//   FB_ICONS_DIR=/mnt/f/SteamLibrary/steamapps/common/Factorio/data
+const ICONS_DIR = process.env.FB_ICONS_DIR ?? '';
+
+// A few prototypes do not share a name with their icon file.
+const ICON_ALIASES: Record<string, string> = {
+  'stone-wall': 'wall',
+  'raw-fish': 'fish',
+  'heat-exchanger': 'heat-boiler',
+};
+
+// name -> absolute path, built once at startup. Serving only what is in this map
+// is also what keeps a request for ../../secrets from resolving to anything.
+const icons = new Map<string, string>();
+
+function indexIcons(root: string) {
+  const walk = (dir: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return; // a mod directory that is not installed
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.png')) {
+        const key = entry.name.slice(0, -4);
+        // First writer wins, so base beats a mod's same-named override.
+        if (!icons.has(key)) icons.set(key, full);
+      }
+    }
+  };
+
+  for (const mod of ['base', 'space-age', 'elevated-rails', 'quality']) {
+    walk(path.join(root, mod, 'graphics', 'icons'));
+  }
+  for (const [name, file] of Object.entries(ICON_ALIASES)) {
+    const target = icons.get(file);
+    if (target && !icons.has(name)) icons.set(name, target);
+  }
+  console.log(`[icons] ${icons.size} indexed from ${root}`);
+}
 const POLL_MS = Number(process.env.FB_POLL_MS ?? 200);
 const HTTP_PORT = Number(process.env.FB_HTTP_PORT ?? 8099);
 
@@ -277,6 +327,8 @@ setInterval(() => {
   readIfChanged(SNAPSHOT_FILE, applySnapshot);
 }, POLL_MS);
 
+if (ICONS_DIR) indexIcons(ICONS_DIR);
+
 console.log(`[files] polling ${OUTPUT_DIR} every ${POLL_MS}ms`);
 
 const server = http.createServer((req, res) => {
@@ -306,6 +358,24 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // /icons/<prototype-name>.png — only names in the index resolve, so the path
+  // never reaches the filesystem as anything the caller wrote.
+  if (url.pathname.startsWith('/icons/')) {
+    const name = decodeURIComponent(url.pathname.slice('/icons/'.length)).replace(/\.png$/, '');
+    const file = icons.get(name);
+    if (!file) {
+      res.writeHead(404).end('no icon');
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'image/png',
+      // Immutable for a given install; the page asks for a lot of these.
+      'Cache-Control': 'public, max-age=86400',
+    });
+    fs.createReadStream(file).pipe(res);
+    return;
+  }
+
   if (url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(
@@ -313,6 +383,7 @@ const server = http.createServer((req, res) => {
         ...stats,
         watching: OUTPUT_DIR,
         clients: clients.size,
+        icons: icons.size,
         lastTick: latest?.tick ?? null,
         ups: currentUps(),
         ageMs: latest ? Date.now() - latest.receivedAt : null,

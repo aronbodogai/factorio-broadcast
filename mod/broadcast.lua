@@ -240,12 +240,28 @@ local function read_logistics(force, surface_name)
 
   for _, network in pairs(by_surface) do
     if network.valid then
+      -- What the network is holding, which is the Items table of the in-game L
+      -- screen. Measured at 0.7 ms for 135 distinct items across two networks,
+      -- so it is affordable every snapshot.
+      --
+      -- get_contents returns one entry per name AND quality; they are summed by
+      -- name here. Splitting them would double the rows for a distinction the
+      -- dashboard has nowhere to show.
+      local contents = {}
+      for _, stack in pairs(network.get_contents()) do
+        contents[stack.name] = (contents[stack.name] or 0) + stack.count
+      end
+
       out[#out + 1] = {
+        -- Stable across snapshots, so the viewer's chosen network stays chosen.
+        -- LuaLogisticNetwork has no name in 2.0, whatever the L screen shows.
+        id = network.network_id,
         cells = #network.cells,
         bots_all = network.all_logistic_robots,
         bots_idle = network.available_logistic_robots,
         construction_all = network.all_construction_robots,
         construction_idle = network.available_construction_robots,
+        contents = contents,
       }
     end
   end
