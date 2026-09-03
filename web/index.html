@@ -478,7 +478,7 @@ h1 { overflow-wrap: anywhere; }
 
 .bar-row {
   display: grid;
-  grid-template-columns: minmax(0, 128px) 1fr auto;
+  grid-template-columns: 20px minmax(0, 128px) 1fr auto;
   align-items: center;
   gap: var(--s-3);
   font-size: 12px;
@@ -1117,6 +1117,7 @@ function renderPower(el, networks, series) {
     const row = (entries, alt) => entries.map(([name, value]) => {
       const pct = scale > 0 ? Math.max(1.5, (value / scale) * 100) : 0;
       return `<div class="bar-row" title="${pretty(name)}: ${watts(value)}">
+        ${icon(name)}
         <span class="bar-name">${pretty(name)}</span>
         <span class="bar-track"><span class="bar-fill${alt ? ' alt' : ''}" style="width:${pct}%"></span></span>
         <span class="bar-value">${watts(value)}</span>

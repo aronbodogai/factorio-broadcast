@@ -345,6 +345,21 @@ local function write(filename, payload)
   return #json
 end
 
+--- Reverses flow_string()/count_string(): "name=val,name=val" back into a
+--- {name: value} table. The one place that still needs the table shape after
+--- protocol 5 is ranking, in series_for below - ranking has to see the whole
+--- set to sort it, a joined string cannot answer "top N" on its own.
+local function parse_flow_string(s)
+  local map = {}
+  for pair in string.gmatch(s or "", "[^,]+") do
+    local eq = string.find(pair, "=", 1, true)
+    if eq then
+      map[string.sub(pair, 1, eq - 1)] = tonumber(string.sub(pair, eq + 1))
+    end
+  end
+  return map
+end
+
 --- The n highest-rate prototype names in a flow map, or all of them when n is nil.
 local function top_names(flow_map, n)
   local names = {}
@@ -460,10 +475,10 @@ local function snapshot()
         local base = flows[BASE_WINDOW] or flows[cfg.windows[1]]
         local limit = cfg.history_items > 0 and cfg.history_items or nil
         local produced, consumed = {}, {}
-        for _, name in pairs(top_names(base.input, limit)) do
+        for _, name in pairs(top_names(parse_flow_string(base.input), limit)) do
           produced[name] = read_series(stats, name, history_window, "input")
         end
-        for _, name in pairs(top_names(base.output, limit)) do
+        for _, name in pairs(top_names(parse_flow_string(base.output), limit)) do
           consumed[name] = read_series(stats, name, history_window, "output")
         end
         return { produced = produced, consumed = consumed }
