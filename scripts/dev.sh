@@ -30,7 +30,7 @@ LUA_UDP_PORT=34200
 RCON_PORT=27015
 RCON_PASSWORD="${FB_RCON_PASSWORD:-devpass}"
 
-WIN_SAVES="/mnt/c/Users/ideku/AppData/Roaming/Factorio/saves"
+WIN_SAVES="/mnt/c/Users/${FB_WIN_USER:-$USER}/AppData/Roaming/Factorio/saves"
 
 # Item icons for the dashboard. The headless build ships no graphics at all, so
 # this points at the Windows Steam copy rather than $FB/factorio.

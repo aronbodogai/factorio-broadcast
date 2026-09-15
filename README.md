@@ -17,15 +17,20 @@ build at `~/fb/factorio` (override with `FB_HOME`), and Node ≥22.18 at
 `~/fb/node` (override with `FB_NODE`).
 
 ```bash
-wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/ideku/factorio-broadcast && bash scripts/dev.sh setup'
-wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/ideku/factorio-broadcast && bash scripts/dev.sh start'
-wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/ideku/factorio-broadcast && bash scripts/dev.sh sidecar'
+git clone https://github.com/aronbodogai/factorio-broadcast.git
+cd factorio-broadcast
+wsl -d Ubuntu -- bash -lc 'bash scripts/dev.sh setup'
+wsl -d Ubuntu -- bash -lc 'bash scripts/dev.sh start'
+wsl -d Ubuntu -- bash -lc 'bash scripts/dev.sh sidecar'
 ```
 
-Open `http://127.0.0.1:8099/` — the sidecar serves the dashboard itself,
-same-origin, no tunnel needed for local use. `dev.sh status` shows whether the
-server and sidecar are up; `dev.sh stop` and `dev.sh sidecar-stop` tear them
-down. Full command reference below, under *Development pipeline*.
+Run the `wsl` lines from PowerShell or cmd inside that folder — `wsl.exe`
+starts in the WSL-translated copy of wherever it was launched from, so there
+is no path to edit. Open `http://127.0.0.1:8099/` — the sidecar serves the
+dashboard itself, same-origin, no tunnel needed for local use. `dev.sh
+status` shows whether the server and sidecar are up; `dev.sh stop` and `dev.sh
+sidecar-stop` tear them down. Full command reference below, under
+*Development pipeline*.
 
 ---
 
@@ -209,8 +214,11 @@ Everything runs from Windows via `wsl.exe`; the repo lives on the Windows side
 and is symlinked into the server's mod directory, so an edit is live on restart.
 
 ```bash
-wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/ideku/factorio-broadcast && bash scripts/dev.sh setup'
+wsl -d Ubuntu -- bash -lc 'bash scripts/dev.sh setup'
 ```
+
+Run from inside the repo folder, same as *Quick start* above — `wsl.exe`
+inherits it as the Linux-side cwd, so `dev.sh` needs no path.
 
 | Command | Does |
 |---|---|
@@ -328,7 +336,7 @@ and real TLS without opening a port. The tunnel is `factorio-broadcast`
 
 ```yaml
 tunnel: 46bf7456-dd14-455e-805b-dc4165a91271
-credentials-file: C:\Users\ideku\.cloudflared\46bf7456-dd14-455e-805b-dc4165a91271.json
+credentials-file: C:\Users\<you>\.cloudflared\46bf7456-dd14-455e-805b-dc4165a91271.json
 
 ingress:
   - hostname: fb-api.aroncreates.com
