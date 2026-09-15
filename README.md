@@ -10,6 +10,25 @@ UDP → sidecar → HTTP/SSE → dashboard, deployed at
 
 ---
 
+## Quick start
+
+Needs, inside WSL2: a distro named `Ubuntu`, a Factorio 2.0 headless Linux
+build at `~/fb/factorio` (override with `FB_HOME`), and Node ≥22.18 at
+`~/fb/node` (override with `FB_NODE`).
+
+```bash
+wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/ideku/factorio-broadcast && bash scripts/dev.sh setup'
+wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/ideku/factorio-broadcast && bash scripts/dev.sh start'
+wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/ideku/factorio-broadcast && bash scripts/dev.sh sidecar'
+```
+
+Open `http://127.0.0.1:8099/` — the sidecar serves the dashboard itself,
+same-origin, no tunnel needed for local use. `dev.sh status` shows whether the
+server and sidecar are up; `dev.sh stop` and `dev.sh sidecar-stop` tear them
+down. Full command reference below, under *Development pipeline*.
+
+---
+
 ## Architecture
 
 ```
@@ -456,12 +475,6 @@ never has to diff snapshots or handle counter resets.
 - **M1** — logistics detail, per-machine status histogram, fluids on all surfaces.
 - **M2** — decide history: live-only today; the game keeps its own 10 m / 1 h / 10 h
   buckets, which can be exposed instead of storing a time series.
-- **M3** — ~~Cloudflare Worker + Durable Object~~ shipped differently: a static
-  Pages site plus a Cloudflare Tunnel straight to the sidecar. No Worker, no
-  stored secret — see *Which sidecar the page talks to*.
-- **M4** — ~~the website~~ shipped: three tabs matching the game's own
-  Production / Electricity / Logistics screens, deployed at
-  [factorio-dash.aroncreates.com](https://factorio-dash.aroncreates.com/).
 
 ### Open questions
 
