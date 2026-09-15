@@ -5,7 +5,8 @@ in-game Production, Electricity and Logistics menus show, pushed once per second
 to an external consumer.
 
 Status: **the full chain works end to end** on a real Space Age save — mod →
-UDP → sidecar → HTTP/SSE. The website is not built yet.
+UDP → sidecar → HTTP/SSE → dashboard, deployed at
+[factorio-dash.aroncreates.com](https://factorio-dash.aroncreates.com/).
 
 ---
 
@@ -455,10 +456,12 @@ never has to diff snapshots or handle counter resets.
 - **M1** — logistics detail, per-machine status histogram, fluids on all surfaces.
 - **M2** — decide history: live-only today; the game keeps its own 10 m / 1 h / 10 h
   buckets, which can be exposed instead of storing a time series.
-- **M3** — Cloudflare: sidecar pushes to a Worker + Durable Object, static site on
-  Pages reads from it. Needs a shared secret and a decision on what is public
-  (server name and player names are the sensitive fields).
-- **M4** — the website.
+- **M3** — ~~Cloudflare Worker + Durable Object~~ shipped differently: a static
+  Pages site plus a Cloudflare Tunnel straight to the sidecar. No Worker, no
+  stored secret — see *Which sidecar the page talks to*.
+- **M4** — ~~the website~~ shipped: three tabs matching the game's own
+  Production / Electricity / Logistics screens, deployed at
+  [factorio-dash.aroncreates.com](https://factorio-dash.aroncreates.com/).
 
 ### Open questions
 
